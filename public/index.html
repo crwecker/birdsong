@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Birdsong</title>
+  <meta name="description" content="Identify birds by sound from your microphone, entirely in your browser.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐦</text></svg>">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <svg class="logo" viewBox="0 0 32 32" aria-hidden="true">
+        <path d="M6 20c3-7 9-11 16-11 2 0 4 .5 5 1.5-2 .2-3.3 1-4 2.5 1.5 5-3 10.5-10 10.5-2.5 0-5-.8-7-3.5Z" fill="currentColor"/>
+        <circle cx="22.5" cy="11.5" r="1.2" fill="var(--bg)"/>
+        <path d="M13 23l-2 5M17 23l1 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+      </svg>
+      <h1>Birdsong</h1>
+    </div>
+    <div id="status" class="status" role="status" aria-live="polite">
+      <span class="dot"></span><span id="statusText">Loading model…</span>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <button id="listenBtn" class="listen" disabled aria-pressed="false">
+        <span class="ring"></span>
+        <svg viewBox="0 0 24 24" aria-hidden="true" class="mic">
+          <path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-2.08A7 7 0 0 0 19 12h-2Z" fill="currentColor"/>
+        </svg>
+        <span id="listenLabel">Start listening</span>
+      </button>
+      <button id="recordBtn" class="record" disabled aria-pressed="false" title="Record this session">
+        <span class="rec-dot" aria-hidden="true"></span>
+        <span id="recordLabel">Record</span>
+      </button>
+      <label class="mic-pick">
+        <span>Microphone</span>
+        <select id="micSelect">
+          <option value="">System default</option>
+        </select>
+      </label>
+      <div class="progress" id="loadProgress"><div class="bar" id="loadBar"></div></div>
+      <p class="hint" id="hint">The bird-ID model (~55 MB) downloads once, then everything runs on your device. No audio leaves your browser.</p>
+    </section>
+
+    <section class="card spectro-card">
+      <div class="card-head">
+        <h2>Live spectrogram</h2>
+        <span class="meta" id="inferMeta"></span>
+      </div>
+      <div class="spectro-wrap">
+        <canvas id="spectrogram" aria-label="Scrolling spectrogram of microphone audio"></canvas>
+        <div class="axis"><span>12 kHz</span><span>6 kHz</span><span>0</span></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>Hearing now</h2>
+        <span class="meta">last 3 seconds</span>
+      </div>
+      <ul id="nowList" class="now-list">
+        <li class="empty">Press <strong>Start listening</strong> and point your mic toward the birds.</li>
+      </ul>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>Birds identified <span class="count" id="logCount">0</span></h2>
+        <button id="clearBtn" class="link-btn" type="button">Clear</button>
+      </div>
+      <ul id="logList" class="log-list">
+        <li class="empty">Birds you hear will collect here.</li>
+      </ul>
+      <details class="skipped" id="skippedBox" hidden>
+        <summary>Skipped this session <span class="count" id="skippedCount">0</span></summary>
+        <ul id="skippedList" class="skipped-list"></ul>
+      </details>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>My sightings <span class="count" id="savedCount">0</span></h2>
+        <span class="meta" id="savedMeta">verified by you</span>
+      </div>
+      <ul id="savedList" class="saved-list">
+        <li class="empty">Tap <strong>Save</strong> on a bird you’ve confirmed to keep it here.</li>
+      </ul>
+    </section>
+
+    <section class="card recordings">
+      <div class="card-head">
+        <h2>Recordings <span class="count" id="recCount">0</span></h2>
+        <span class="meta push" id="recMeta"></span>
+        <label class="file-btn small" title="Upload an audio file (WAV, MP3, M4A, FLAC, OGG…) and find the birds in it">
+          <input type="file" id="uploadInput" accept="audio/*" disabled>
+          <span id="uploadLabel">Upload</span>
+        </label>
+      </div>
+      <p class="rec-note" id="recNote" hidden></p>
+
+      <div class="player" id="player" hidden>
+        <div class="player-head">
+          <input class="player-name" id="playerName" aria-label="Recording name" maxlength="120">
+          <span class="meta" id="playerMeta"></span>
+          <button class="link-btn" id="playerClose" type="button">Close</button>
+        </div>
+        <div class="det-track empty" id="detTrack" aria-label="Detections"></div>
+        <div class="view-wrap">
+          <canvas id="playerSpec" aria-label="Recording spectrogram. Drag to scroll, click to seek."></canvas>
+          <div class="playhead" id="playhead"></div>
+          <div class="player-status" id="playerStatus" hidden></div>
+        </div>
+        <div class="overview" id="overviewWrap" title="Drag to move around the recording">
+          <canvas id="overview"></canvas>
+          <div class="window" id="overviewWindow"></div>
+        </div>
+        <div class="transport">
+          <button class="act" id="back5" type="button" title="Back 5 seconds">−5s</button>
+          <button class="act play" id="playBtn" type="button" aria-label="Play"></button>
+          <button class="act" id="fwd5" type="button" title="Forward 5 seconds">+5s</button>
+          <span class="time" id="playTime">0:00 / 0:00</span>
+          <span class="spacer"></span>
+          <button class="act" id="zoomOut" type="button" title="Zoom out" aria-label="Zoom out">−</button>
+          <button class="act" id="zoomIn" type="button" title="Zoom in" aria-label="Zoom in">+</button>
+          <button class="act" id="findBirds" type="button" title="Run bird identification over the whole recording">Find birds</button>
+          <button class="act" id="downloadBtn" type="button" title="Download">Download</button>
+        </div>
+        <audio id="playerAudio" preload="metadata"></audio>
+      </div>
+
+      <ul id="recList" class="rec-list">
+        <li class="empty">Press <strong>Record</strong> while listening, or upload a recording.</li>
+      </ul>
+    </section>
+
+    <section class="card settings">
+      <h2>Settings</h2>
+      <label class="row">
+        <span>
+          Minimum confidence <output id="thresholdOut">25%</output>
+          <small>Higher means fewer, surer IDs.</small>
+        </span>
+        <input type="range" id="threshold" min="5" max="90" step="5" value="25">
+      </label>
+      <label class="row">
+        <span>
+          Only species expected near me
+          <small id="geoNote">Uses your location and the time of year to rule out unlikely birds.</small>
+        </span>
+        <input type="checkbox" id="geoToggle" class="switch">
+      </label>
+    </section>
+  </main>
+
+  <footer>
+    Identification by <a href="https://birdnet.cornell.edu/" target="_blank" rel="noopener">BirdNET</a>
+    (K. Lisa Yang Center for Conservation Bioacoustics &amp; Chemnitz University of Technology).
+    Model licensed <a href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank" rel="noopener">CC BY-SA 4.0</a>.
+    Inference code adapted from <a href="https://github.com/birdnet-team/real-time-pwa" target="_blank" rel="noopener">BirdNET Live</a>.
+  </footer>
+
+  <template id="logItemTpl">
+    <li class="log-item">
+      <div class="thumb"><span></span></div>
+      <div class="info">
+        <div class="name"></div>
+        <div class="sci"></div>
+        <div class="stats"></div>
+        <button type="button" class="details-btn" aria-expanded="false">Details</button>
+      </div>
+      <div class="actions">
+        <button type="button" class="act save" title="Save as a verified sighting" aria-label="Save as a verified sighting">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10.5l4 4 8-9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span class="lbl">Save</span>
+        </button>
+        <button type="button" class="act skip" title="Skip this bird for the rest of the session" aria-label="Skip this bird for the rest of the session">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="6.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M5.5 14.5l9-9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        </button>
+        <button type="button" class="act remove" title="Remove from list" aria-label="Remove from list">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5.5 5.5l9 9M14.5 5.5l-9 9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+      <div class="detail" hidden></div>
+    </li>
+  </template>
+
+  <template id="savedItemTpl">
+    <li class="saved-item">
+      <div class="thumb sm"><span></span></div>
+      <div class="info">
+        <div class="name"></div>
+        <div class="stats"></div>
+      </div>
+      <button type="button" class="act remove" title="Delete this sighting" aria-label="Delete this sighting">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5.5 5.5l9 9M14.5 5.5l-9 9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+      </button>
+    </li>
+  </template>
+
+  <dialog id="lightbox" class="lightbox">
+    <form method="dialog"><button class="close" aria-label="Close">×</button></form>
+    <img alt="">
+    <p class="caption"></p>
+  </dialog>
+
+  <script src="app.js" type="module"></script>
+</body>
+</html>
