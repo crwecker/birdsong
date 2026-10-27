@@ -8,6 +8,8 @@
 
 const MODEL_RATE = 48000;
 const WINDOW_SEC = 3;
+// Window spacing for "Find birds": 0.5 s matches live listening; long files use 1 s to stay quick.
+const analysisHop = duration => (duration > 1800 ? 1 : 0.5);
 const FLUSH_MS = 3000;
 const ZOOMS = [2, 5, 10, 20, 40, 80, 160]; // pixels per second
 const TRACK_COLORS = ['#e07a5f', '#3d9970', '#5b8def', '#c2952d', '#a26bd6', '#d6608f'];
@@ -330,21 +332,26 @@ export function createRecordings(app) {
     els.findBirds.disabled = true;
     const label = els.findBirds.textContent;
     try {
-      const result = await app.predict(player.pcm.slice(), p => {
+      els.findBirds.textContent = 'Filtering…';
+      const pcm = await app.filterNoise(player.pcm.slice());
+      // Overlapping windows so each call lands well inside at least one of them.
+      const result = await app.predict(pcm, p => {
         els.findBirds.textContent = `Finding… ${Math.round(p * 100)}%`;
-      });
-      const detections = [];
+      }, analysisHop(player.duration) * MODEL_RATE);
+      const found = [];
       for (const frame of result.frames) {
         for (const [i, score] of app.plausibleHits(frame.hits)) {
           if (score < app.threshold()) break;
           const l = app.labelOf(i);
-          mergeDetection(detections, {
-            start: frame.start, end: Math.min(frame.start + WINDOW_SEC, player.duration),
+          mergeDetection(found, {
+            index: i, start: frame.start, end: Math.min(frame.start + WINDOW_SEC, player.duration),
             scientificName: l.scientificName, commonName: l.commonName, confidence: score,
           });
-          app.recordDetection(i, score, Date.now(), `in ${r.name} at ${formatTime(frame.start)}`);
         }
       }
+      // One identified-list entry per merged detection, not per overlapping window.
+      for (const d of found) app.recordDetection(d.index, d.confidence, Date.now(), `in ${r.name} at ${formatTime(d.start)}`);
+      const detections = found.map(({ index, ...d }) => d);
       r.detections = detections;
       await patch(r, { detections });
       renderTrack();

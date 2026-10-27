@@ -141,10 +141,20 @@
       <h2>Settings</h2>
       <label class="row">
         <span>
-          Minimum confidence <output id="thresholdOut">25%</output>
-          <small>Higher means fewer, surer IDs.</small>
+          Minimum confidence <output id="thresholdOut">15%</output>
+          <small>Lower catches fainter birds but adds more mistakes. Turn on the location filter below to weed those out.</small>
         </span>
-        <input type="range" id="threshold" min="5" max="90" step="5" value="25">
+        <input type="range" id="threshold" min="5" max="90" step="5" value="15">
+      </label>
+      <label class="row">
+        <span>
+          Noise filter
+          <small>Only for steady traffic or electrical hum. In quiet or windy places it does more harm than good, so leave it off.</small>
+        </span>
+        <select id="noiseFilter" class="select">
+          <option value="off">Off</option>
+          <option value="traffic">Traffic &amp; hum (150 Hz)</option>
+        </select>
       </label>
       <label class="row">
         <span>

@@ -36,7 +36,12 @@ pages or `http://localhost`, so deploy `public/` behind HTTPS if you host it els
   click a bar to hear that detection. **Find birds** re-runs identification over the whole file.
 - **Microphone picker**: choose any input device; the choice is remembered, and switching while
   listening takes effect immediately.
-- Adjustable confidence threshold (default 25%).
+- **Sensitivity**: minimum confidence defaults to 15%, with 3 s windows analyzed every 0.5 s (live and
+  in recordings). On a noisy test soundscape this caught 2.5-3x more birdsong than 25% with
+  back-to-back windows. Turn on the location filter to weed out the extra out-of-range guesses.
+- **Noise filter** (optional): a 150 Hz high-pass for steady traffic or hum. In quiet or windy
+  conditions filtering made detection worse (the model is trained on unfiltered audio), so it's off
+  by default.
 
 ## Two ways to run it
 

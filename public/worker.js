@@ -222,18 +222,23 @@ onmessage = async ({ data }) => {
 };
 
 /**
- * Splits `pcm` (48 kHz mono) into back-to-back 3 s frames (the last one
- * zero-padded) and returns, for each frame, the scores above MIN_REPORTED.
+ * Splits `pcm` (48 kHz mono) into 3 s frames starting every `hop` samples
+ * (default: back to back; the last frame zero-padded) and returns, for each
+ * frame, the scores above MIN_REPORTED.
  */
-async function predict({ id, pcm }) {
-  const numFrames = Math.max(1, Math.ceil(pcm.length / WINDOW_SAMPLES));
+async function predict({ id, pcm, hop = WINDOW_SAMPLES }) {
+  hop = Math.max(1, Math.min(WINDOW_SAMPLES, hop | 0));
+  const numFrames = Math.max(1, Math.ceil(Math.max(0, pcm.length - WINDOW_SAMPLES) / hop) + 1);
   const frames = [];
   const t0 = performance.now();
 
   for (let start = 0; start < numFrames; start += MAX_BATCH) {
     const count = Math.min(MAX_BATCH, numFrames - start);
     const batch = new Float32Array(count * WINDOW_SAMPLES);
-    batch.set(pcm.subarray(start * WINDOW_SAMPLES, (start + count) * WINDOW_SAMPLES));
+    for (let f = 0; f < count; f++) {
+      const from = (start + f) * hop;
+      batch.set(pcm.subarray(from, from + WINDOW_SAMPLES), f * WINDOW_SAMPLES);
+    }
 
     const input = tf.tensor2d(batch, [count, WINDOW_SAMPLES]);
     const output = birdModel.predict(input);
@@ -249,7 +254,7 @@ async function predict({ id, pcm }) {
         if (s >= MIN_REPORTED) hits.push([i, s]);
       }
       hits.sort((a, b) => b[1] - a[1]);
-      frames.push({ start: (start + f) * WINDOW_SAMPLES / SAMPLE_RATE, hits });
+      frames.push({ start: (start + f) * hop / SAMPLE_RATE, hits });
     }
     if (numFrames > 1) {
       postMessage({ type: 'predict-progress', id, progress: (start + count) / numFrames });

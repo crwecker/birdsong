@@ -11,7 +11,11 @@ const backend = await createBackend();
 
 const MODEL_RATE = 48000;
 const WINDOW_SAMPLES = 3 * MODEL_RATE; // BirdNET analyses 3 s windows
-const INFER_INTERVAL_MS = 1000; // slide the window by ~1 s
+const INFER_INTERVAL_MS = 500; // slide the window by ~0.5 s so calls land well inside some window
+// High-pass cutoff, Hz. Measured on a noisy test soundscape: 150 Hz helps under traffic
+// and mains hum, but any filtering costs detections in quiet or windy conditions (the
+// model is trained on unfiltered recordings), so it's off by default.
+const NOISE_FILTERS = { off: 0, traffic: 150 };
 const MAYBE_FLOOR = 0.1; // show weaker candidates (greyed) above this
 const GEO_MIN = 0.03; // area-model score below which a species is ruled out
 const NEW_ENCOUNTER_GAP_MS = 5000; // detections closer than this count as one
@@ -25,7 +29,7 @@ const els = {
   nowList: $('nowList'), logList: $('logList'), logCount: $('logCount'), clearBtn: $('clearBtn'),
   skippedBox: $('skippedBox'), skippedList: $('skippedList'), skippedCount: $('skippedCount'), savedList: $('savedList'), savedCount: $('savedCount'),
   savedItemTpl: $('savedItemTpl'), lightbox: $('lightbox'),
-  threshold: $('threshold'), thresholdOut: $('thresholdOut'),
+  threshold: $('threshold'), thresholdOut: $('thresholdOut'), noiseFilter: $('noiseFilter'),
   geoToggle: $('geoToggle'), geoNote: $('geoNote'),
   recordBtn: $('recordBtn'), recordLabel: $('recordLabel'),
   uploadInput: $('uploadInput'), uploadLabel: $('uploadLabel'), recNote: $('recNote'),
@@ -42,7 +46,8 @@ const els = {
 const state = {
   labels: [],
   geoScores: null,
-  threshold: loadNumber('birdsong.threshold', 0.25),
+  threshold: loadNumber('birdsong.threshold', 0.15),
+  noiseFilter: loadString('birdsong.noiseFilter') || 'off',
   log: new Map(), // label index -> { index, count, best, lastSeen, sightingId, el }
   skipped: new Map(), // label index -> log entry, kept out of the list for this session
   sightings: [], // saved, verified sightings (persisted by the server)
@@ -110,12 +115,50 @@ function startWorker() {
   worker.onerror = e => setStatus(`Worker error: ${e.message}`, 'error');
 }
 
-function predict(pcm, onProgress) {
+/** `hop` (samples) overlaps the 3 s analysis windows; omitted, they're back to back. */
+function predict(pcm, onProgress, hop) {
   const id = state.nextId++;
   return new Promise((resolve, reject) => {
     state.pending.set(id, { resolve, reject, onProgress });
-    state.worker.postMessage({ type: 'predict', id, pcm }, [pcm.buffer]);
+    state.worker.postMessage({ type: 'predict', id, pcm, hop }, [pcm.buffer]);
   });
+}
+
+/* ---------------------------------------------------------------------------
+   Noise filter
+   ------------------------------------------------------------------------- */
+
+// Traffic and mains hum sit below the songs of almost all birds.
+function noiseCutoff() {
+  return NOISE_FILTERS[state.noiseFilter] ?? NOISE_FILTERS.off;
+}
+
+/** Two cascaded Butterworth high-pass stages (24 dB/octave). */
+function createNoiseFilter(ctx) {
+  const stages = [ctx.createBiquadFilter(), ctx.createBiquadFilter()];
+  for (const f of stages) {
+    f.type = 'highpass';
+    f.Q.value = Math.SQRT1_2;
+  }
+  stages[0].connect(stages[1]);
+  const setCutoff = hz => stages.forEach(f => { f.frequency.value = Math.max(hz, 10); });
+  setCutoff(noiseCutoff());
+  return { input: stages[0], output: stages[1], setCutoff };
+}
+
+/** Applies the current noise filter to a 48 kHz mono buffer (for recordings and uploads). */
+async function filterNoise(pcm) {
+  if (!noiseCutoff()) return pcm;
+  const ctx = new OfflineAudioContext(1, pcm.length, MODEL_RATE);
+  const buffer = ctx.createBuffer(1, pcm.length, MODEL_RATE);
+  buffer.copyToChannel(pcm, 0);
+  const src = ctx.createBufferSource();
+  src.buffer = buffer;
+  const filter = createNoiseFilter(ctx);
+  src.connect(filter.input);
+  filter.output.connect(ctx.destination);
+  src.start();
+  return (await ctx.startRendering()).getChannelData(0);
 }
 
 /* ---------------------------------------------------------------------------
@@ -123,7 +166,7 @@ function predict(pcm, onProgress) {
    ------------------------------------------------------------------------- */
 
 const audio = {
-  ctx: null, stream: null, source: null, worklet: null, analyser: null,
+  ctx: null, stream: null, source: null, filter: null, worklet: null, analyser: null,
   ring: new Float32Array(WINDOW_SAMPLES), writeIndex: 0, filled: 0,
   resampler: null, timer: null, busy: false, wakeLock: null, rafId: 0,
   startedAt: 0, chunks: 0, peak: 0, warned: false,
@@ -167,7 +210,9 @@ async function startListening() {
       for (let i = 0; i < data.length; i++) audio.peak = Math.max(audio.peak, Math.abs(data[i]));
       pushSamples(audio.resampler.process(data));
     };
-    audio.source.connect(audio.worklet);
+    audio.filter = createNoiseFilter(audio.ctx);
+    audio.source.connect(audio.filter.input);
+    audio.filter.output.connect(audio.worklet);
     audio.worklet.connect(audio.ctx.destination); // keeps the node pulled; it outputs silence
 
     audio.analyser = audio.ctx.createAnalyser();
@@ -175,7 +220,7 @@ async function startListening() {
     audio.analyser.smoothingTimeConstant = 0;
     audio.analyser.minDecibels = -110; // birdsong is often faint; favour contrast
     audio.analyser.maxDecibels = -45;
-    audio.source.connect(audio.analyser);
+    audio.filter.output.connect(audio.analyser); // the spectrogram shows what the model hears
     startSpectrogram();
 
     state.listening = true;
@@ -234,7 +279,7 @@ function stopListening({ keepRecording = false } = {}) {
   audio.worklet?.port && (audio.worklet.port.onmessage = null);
   audio.stream?.getTracks().forEach(t => t.stop());
   audio.ctx?.close();
-  Object.assign(audio, { ctx: null, stream: null, source: null, worklet: null, analyser: null, timer: null });
+  Object.assign(audio, { ctx: null, stream: null, source: null, filter: null, worklet: null, analyser: null, timer: null });
   audio.wakeLock?.release().catch(() => {});
   audio.wakeLock = null;
   setListeningUI(false);
@@ -995,6 +1040,13 @@ els.threshold.addEventListener('input', () => {
   els.thresholdOut.textContent = `${els.threshold.value}%`;
   saveSetting('birdsong.threshold', String(state.threshold));
 });
+if (!(state.noiseFilter in NOISE_FILTERS)) state.noiseFilter = 'off';
+els.noiseFilter.value = state.noiseFilter;
+els.noiseFilter.addEventListener('change', () => {
+  state.noiseFilter = els.noiseFilter.value;
+  saveSetting('birdsong.noiseFilter', state.noiseFilter);
+  audio.filter?.setCutoff(noiseCutoff());
+});
 els.geoToggle.checked = loadNumber('birdsong.geo', 0) === 1;
 els.geoToggle.addEventListener('change', () => (els.geoToggle.checked ? enableGeo() : disableGeo()));
 document.addEventListener('visibilitychange', () => {
@@ -1010,7 +1062,7 @@ els.lightbox.addEventListener('click', e => {
 });
 
 const recordings = createRecordings({
-  backend, els, h, formatTime, COLORMAP, predict, plausibleHits, recordDetection,
+  backend, els, h, formatTime, COLORMAP, predict, filterNoise, plausibleHits, recordDetection,
   labelOf: i => state.labels[i],
   threshold: () => state.threshold,
   isListening: () => state.listening,
