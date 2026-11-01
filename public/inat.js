@@ -9,28 +9,43 @@ const FEMALE = 10;
 
 export const SOUND_TYPES = ['song', 'call', 'alarm call', 'flight call', 'drumming', 'begging call', 'subsong'];
 
-/** Up to two male and two female research-grade photos, else the taxon's curated photos. */
+// Bump when the shape of gathered details changes, so cached entries are re-fetched.
+export const INFO_VERSION = 2;
+
+const MAX_PHOTOS = 10;
+
+/**
+ * Up to three male and three female research-grade photos, topped up with the
+ * taxon's curated photos. Returns the iNaturalist taxon id too, for links.
+ */
 export async function getPhotos(scientificName, getJson) {
-  const [males, females] = await Promise.all([
-    sexedPhotos(scientificName, MALE, 'Male', getJson),
-    sexedPhotos(scientificName, FEMALE, 'Female', getJson),
+  const [males, females, taxon] = await Promise.all([
+    sexedPhotos(scientificName, MALE, 'Male', getJson).catch(() => []),
+    sexedPhotos(scientificName, FEMALE, 'Female', getJson).catch(() => []),
+    findTaxon(scientificName, getJson).catch(() => null),
   ]);
   const photos = [...males, ...females];
-  if (photos.length >= 2) return photos;
+  if (taxon) {
+    const detail = await getJson(`${INAT}/taxa/${taxon.id}`).catch(() => null);
+    // The curated set often repeats an observation photo already picked.
+    for (const tp of detail?.results?.[0]?.taxon_photos ?? []) {
+      if (photos.length >= MAX_PHOTOS) break;
+      if (tp.photo?.url && !photos.some(p => p.id === tp.photo.id)) photos.push(toPhoto(tp.photo, null));
+    }
+  }
+  return { photos, taxonId: taxon?.id ?? null };
+}
 
-  // Few sexed observations (common for tropical species): use the taxon's curated photos.
-  const taxa = await getJson(`${INAT}/taxa?${new URLSearchParams({ q: scientificName, rank: 'species', per_page: '1' })}`);
-  const taxon = taxa.results?.[0];
-  if (!taxon) return photos;
-  const detail = await getJson(`${INAT}/taxa/${taxon.id}`);
-  const extra = (detail.results?.[0]?.taxon_photos ?? []).slice(0, 4 - photos.length).map(tp => toPhoto(tp.photo, null));
-  return [...photos, ...extra];
+async function findTaxon(scientificName, getJson) {
+  const taxa = await getJson(`${INAT}/taxa?${new URLSearchParams({ q: scientificName, rank: 'species', per_page: '5' })}`);
+  const results = taxa.results ?? [];
+  return results.find(t => t.name === scientificName) ?? results[0] ?? null;
 }
 
 async function sexedPhotos(scientificName, sexValue, label, getJson) {
   const params = new URLSearchParams({
     taxon_name: scientificName, term_id: String(SEX_TERM), term_value_id: String(sexValue),
-    quality_grade: 'research', photos: 'true', photo_licensed: 'true', order_by: 'votes', per_page: '2',
+    quality_grade: 'research', photos: 'true', photo_licensed: 'true', order_by: 'votes', per_page: '3',
   });
   const data = await getJson(`${INAT}/observations?${params}`);
   return (data.results ?? []).filter(o => o.photos?.length).map(o => toPhoto(o.photos[0], label));
@@ -39,9 +54,11 @@ async function sexedPhotos(scientificName, sexValue, label, getJson) {
 function toPhoto(photo, label) {
   const url = photo.url ?? '';
   return {
+    id: photo.id,
     label,
-    thumb: url.replace('/square.', '/small.'),
+    thumb: url.replace('/square.', '/medium.'), // ~500 px: sharp on high-DPI phones
     full: url.replace('/square.', '/large.'),
+    original: url.replace('/square.', '/original.'),
     credit: photo.attribution,
   };
 }

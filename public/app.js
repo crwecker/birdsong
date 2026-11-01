@@ -4,7 +4,7 @@
  */
 
 import { createRecordings } from './recordings.js';
-import { createBackend } from './backend.js';
+import { createBackend, wavHeader } from './backend.js';
 
 // The local server when running `npm start`; this browser's storage on static hosting.
 const backend = await createBackend();
@@ -19,6 +19,7 @@ const NOISE_FILTERS = { off: 0, traffic: 150 };
 const MAYBE_FLOOR = 0.1; // show weaker candidates (greyed) above this
 const GEO_MIN = 0.03; // area-model score below which a species is ruled out
 const NEW_ENCOUNTER_GAP_MS = 5000; // detections closer than this count as one
+const CLIPS_PER_BIRD = 4; // playable clips kept per species (one per encounter, strongest first to go last)
 
 const $ = id => document.getElementById(id);
 const els = {
@@ -30,7 +31,7 @@ const els = {
   skippedBox: $('skippedBox'), skippedList: $('skippedList'), skippedCount: $('skippedCount'), savedList: $('savedList'), savedCount: $('savedCount'),
   savedItemTpl: $('savedItemTpl'), lightbox: $('lightbox'),
   threshold: $('threshold'), thresholdOut: $('thresholdOut'), noiseFilter: $('noiseFilter'),
-  geoToggle: $('geoToggle'), geoNote: $('geoNote'),
+  geoToggle: $('geoToggle'), geoNote: $('geoNote'), clipsToggle: $('clipsToggle'),
   recordBtn: $('recordBtn'), recordLabel: $('recordLabel'),
   uploadInput: $('uploadInput'), uploadLabel: $('uploadLabel'), recNote: $('recNote'),
   recCount: $('recCount'), recList: $('recList'),
@@ -48,6 +49,7 @@ const state = {
   geoScores: null,
   threshold: loadNumber('birdsong.threshold', 0.15),
   noiseFilter: loadString('birdsong.noiseFilter') || 'off',
+  keepClips: loadNumber('birdsong.clips', 1) === 1,
   log: new Map(), // label index -> { index, count, best, lastSeen, sightingId, el }
   skipped: new Map(), // label index -> log entry, kept out of the list for this session
   sightings: [], // saved, verified sightings (persisted by the server)
@@ -201,7 +203,7 @@ async function startListening() {
     audio.ring.fill(0);
     audio.writeIndex = 0;
     audio.filled = 0;
-    Object.assign(audio, { startedAt: performance.now(), chunks: 0, peak: 0, warned: false });
+    Object.assign(audio, { startedAt: performance.now(), chunks: 0, peak: 0, warned: false, inferMs: 0 });
 
     await audio.ctx.audioWorklet.addModule('audio-processor.js');
     audio.worklet = new AudioWorkletNode(audio.ctx, 'capture-processor');
@@ -316,10 +318,13 @@ async function inferTick() {
   audio.busy = true;
   try {
     const recordedAt = recordings.samplesRecorded(); // where this window ends in the recording
-    const result = await predict(currentWindow());
+    const pcm = currentWindow();
+    const clipSource = state.keepClips ? pcm.slice() : null; // predict() hands pcm's buffer to the worker
+    const result = await predict(pcm);
     if (!state.listening) return;
-    els.inferMeta.textContent = `${levelText()} · inference ${Math.round(result.ms)} ms`;
-    handleLiveFrame(result.frames[0].hits, recordedAt);
+    audio.inferMs = result.ms;
+    els.inferMeta.textContent = meterText();
+    handleLiveFrame(result.frames[0].hits, recordedAt, clipSource);
   } catch (err) {
     console.error(err);
   } finally {
@@ -333,7 +338,7 @@ async function inferTick() {
  */
 function checkSignal() {
   const elapsed = performance.now() - audio.startedAt;
-  if (!audio.busy) els.inferMeta.textContent = levelText();
+  els.inferMeta.textContent = meterText();
   if (elapsed < 3000 || audio.warned) {
     audio.lastPeak = audio.peak;
     audio.peak = 0;
@@ -354,9 +359,11 @@ function checkSignal() {
   audio.peak = 0;
 }
 
-function levelText() {
+// One format for every update, so the header doesn't change shape (and wrap) twice a second.
+function meterText() {
   const peak = Math.max(audio.lastPeak || 0, audio.peak);
-  return peak > 0 ? `mic ${Math.round(20 * Math.log10(peak))} dB` : 'mic silent';
+  const level = peak > 0 ? `mic ${Math.round(20 * Math.log10(peak))} dB` : 'mic silent';
+  return audio.inferMs ? `${level} · inference ${Math.round(audio.inferMs)} ms` : level;
 }
 
 /** Streaming linear-interpolation resampler (identity when rates match). */
@@ -470,7 +477,8 @@ function plausibleHits(hits) {
   });
 }
 
-function handleLiveFrame(hits, recordedAt) {
+/** `clipSource` is a copy of the analysed window when clips are being kept. */
+function handleLiveFrame(hits, recordedAt, clipSource) {
   // The mic would hear a reference recording playing through the speakers.
   if (refAudio.blocking()) {
     els.nowList.innerHTML = '<li class="empty">Paused while a reference sound plays…</li>';
@@ -483,6 +491,7 @@ function handleLiveFrame(hits, recordedAt) {
     if (score >= state.threshold) {
       const isNew = recordDetection(i, score, Date.now());
       if (isNew) markSpectrogram(state.labels[i].commonName);
+      if (clipSource) keepClip(state.log.get(i), score, clipSource);
     }
   }
 }
@@ -564,13 +573,14 @@ function createLogItem(entry) {
 
   const detailsBtn = el.querySelector('.details-btn');
   const detail = el.querySelector('.detail');
+  const ref = detail.querySelector('.ref');
   detailsBtn.addEventListener('click', () => {
     const open = detail.hidden;
     detail.hidden = !open;
     detailsBtn.setAttribute('aria-expanded', String(open));
-    if (open && !detail.dataset.loaded) {
-      detail.dataset.loaded = '1';
-      renderDetail(detail, scientificName);
+    if (open && !ref.dataset.loaded) {
+      ref.dataset.loaded = '1';
+      renderDetail(ref, scientificName);
     }
   });
   el.querySelector('.act.save').addEventListener('click', () => toggleSaved(entry));
@@ -586,10 +596,12 @@ function updateLogStats(entry) {
   stats.append(when);
 }
 
-function removeFromLog(index) {
+/** Skipping keeps the bird's clips in case it's restored; removing discards them. */
+function removeFromLog(index, { keepClips = false } = {}) {
   const entry = state.log.get(index);
   if (!entry) return;
   if (refAudio.button && entry.el.contains(refAudio.button)) refAudio.stop();
+  if (!keepClips) releaseClips(entry);
   entry.el.remove();
   state.log.delete(index);
   els.logCount.textContent = state.log.size;
@@ -597,7 +609,7 @@ function removeFromLog(index) {
 }
 
 function skipBird(entry) {
-  removeFromLog(entry.index);
+  removeFromLog(entry.index, { keepClips: true });
   entry.heardSinceSkip = 0;
   entry.skippedAt = Date.now();
   state.skipped.set(entry.index, entry);
@@ -640,8 +652,8 @@ function renderSkipped() {
   }));
 }
 
-function formatClock(ms) {
-  return new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+function formatClock(ms, seconds = false) {
+  return new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', ...(seconds && { second: '2-digit' }) });
 }
 
 const thumbCache = new Map();
@@ -664,9 +676,95 @@ function setBackground(el, src) {
 
 function clearLog() {
   refAudio.stop();
+  state.log.forEach(releaseClips);
   state.log.clear();
   els.logCount.textContent = '0';
   els.logList.innerHTML = '<li class="empty">Birds you hear will collect here.</li>';
+}
+
+/* ---------------------------------------------------------------------------
+   Heard clips: the audio behind each identification
+   ------------------------------------------------------------------------- */
+
+/**
+ * Keeps the strongest 3 s window of each encounter as a playable clip. One call
+ * fires several overlapping windows (0.5 s apart); the best-scoring one wins.
+ */
+function keepClip(entry, score, pcm) {
+  if (!entry) return; // skipped birds don't collect clips
+  entry.clips ??= [];
+  const current = entry.clips.find(c => c.encounter === entry.count);
+  if (current && score <= current.score) return;
+  const clip = { encounter: entry.count, score, at: Date.now(), url: URL.createObjectURL(encodeClip(pcm)) };
+  if (current) {
+    URL.revokeObjectURL(current.url);
+    entry.clips[entry.clips.indexOf(current)] = clip;
+  } else {
+    entry.clips.push(clip);
+    if (entry.clips.length > CLIPS_PER_BIRD) {
+      // Make room by dropping the weakest earlier clip.
+      const weakest = entry.clips.slice(0, -1).reduce((a, b) => (b.score < a.score ? b : a));
+      URL.revokeObjectURL(weakest.url);
+      entry.clips.splice(entry.clips.indexOf(weakest), 1);
+    }
+  }
+  renderClips(entry);
+}
+
+function releaseClips(entry) {
+  if (!entry.clips?.length) return;
+  entry.clips.forEach(c => URL.revokeObjectURL(c.url));
+  entry.clips = [];
+  renderClips(entry);
+}
+
+/** 16-bit WAV, peak-normalized so faint, distant birds are audible, with short fades against clicks. */
+function encodeClip(pcm) {
+  let peak = 0;
+  for (let i = 0; i < pcm.length; i++) peak = Math.max(peak, Math.abs(pcm[i]));
+  const gain = peak > 0 ? Math.min(20, 0.9 / peak) : 1;
+  const fade = Math.round(0.01 * MODEL_RATE);
+  const out = new Int16Array(pcm.length);
+  for (let i = 0; i < pcm.length; i++) {
+    const env = Math.min(1, i / fade, (pcm.length - 1 - i) / fade);
+    const s = Math.max(-1, Math.min(1, pcm[i] * gain * env));
+    out[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+  }
+  return new Blob([wavHeader(out.byteLength), out], { type: 'audio/wav' });
+}
+
+function renderClips(entry) {
+  const box = entry.el.querySelector('.heard');
+  const clips = [...(entry.clips ?? [])].sort((a, b) => a.at - b.at);
+  const detailsBtn = entry.el.querySelector('.details-btn');
+  detailsBtn.textContent = clips.length ? `Details · ${clips.length} clip${clips.length > 1 ? 's' : ''}` : 'Details';
+  box.hidden = !clips.length;
+  if (!clips.length) {
+    box.replaceChildren();
+    return;
+  }
+  const { commonName } = state.labels[entry.index];
+  const row = h('div', 'sound-row');
+  for (const clip of clips) {
+    const time = formatClock(clip.at, true);
+    const btn = h('button', 'sound');
+    btn.type = 'button';
+    btn.title = `Play what Birdsong heard at ${time}`;
+    btn.innerHTML = PLAY_ICON;
+    btn.append(time, h('span', 'dur', `${Math.round(clip.score * 100)}%`));
+    btn.addEventListener('click', () => refAudio.toggle(btn, clip.url));
+    refAudio.adopt(btn, clip.url); // keep a playing clip's button live across re-renders
+    const download = h('a', 'clip-dl');
+    download.href = clip.url;
+    download.download = `${commonName} ${time.replace(/:/g, '.')}.wav`;
+    download.title = 'Download this clip';
+    download.setAttribute('aria-label', download.title);
+    download.innerHTML = DOWNLOAD_ICON;
+    const pair = h('span', 'clip');
+    pair.append(btn, download);
+    row.append(pair);
+  }
+  box.replaceChildren(h('h4', '', 'Heard by Birdsong'), row);
 }
 
 /* ---------------------------------------------------------------------------
@@ -698,16 +796,16 @@ async function renderDetail(container, scientificName) {
 
   if (info.photos.length) {
     const strip = h('div', 'photo-strip');
-    for (const photo of info.photos) {
+    info.photos.forEach((photo, n) => {
       const btn = h('button', 'photo');
       btn.type = 'button';
       btn.title = photo.credit || '';
       btn.setAttribute('aria-label', `${photo.label || 'Photo'}, enlarge`);
       setBackground(btn, photo.thumb);
       if (photo.label) btn.append(h('span', 'sex', `${photo.label === 'Male' ? '♂' : '♀'} ${photo.label}`));
-      btn.addEventListener('click', () => openLightbox(photo, info.commonName));
+      btn.addEventListener('click', () => openLightbox(info.photos, n, info.commonName));
       strip.append(btn);
-    }
+    });
     container.append(strip);
   }
 
@@ -736,19 +834,42 @@ async function renderDetail(container, scientificName) {
   container.append(sounds);
 
   container.append(renderFacts(info));
+  container.append(renderLinks(info, scientificName));
 
   const credits = h('p', 'credits');
   const parts = [];
   if (info.photos.length) parts.push('Photos: iNaturalist');
   if (info.sounds.length) parts.push(`Sounds: ${info.soundsSource === 'xeno-canto' ? 'xeno-canto' : 'iNaturalist'}`);
   if (info.factsSource) parts.push(`Notes: ${info.factsSource === 'claude' ? 'Claude' : 'Wikipedia'}`);
-  credits.textContent = `${parts.join(' · ')} (hover for credits) · `;
-  const wiki = h('a', '', 'Wikipedia ↗');
-  wiki.href = info.wikiUrl || `https://en.wikipedia.org/wiki/${encodeURIComponent(scientificName.replace(/ /g, '_'))}`;
-  wiki.target = '_blank';
-  wiki.rel = 'noopener';
-  credits.append(wiki);
+  credits.textContent = `${parts.join(' · ')} (hover or open a photo for credits)`;
   container.append(credits);
+}
+
+/** Field guides, recordings and videos about the species, all by name so they work for any bird. */
+function renderLinks(info, scientificName) {
+  const q = encodeURIComponent;
+  const commonName = info.commonName || scientificName;
+  const links = [
+    ['All About Birds', `https://www.allaboutbirds.org/news/search/?q=${q(commonName)}`],
+    ['Wikipedia', info.wikiUrl || `https://en.wikipedia.org/wiki/${q(scientificName.replace(/ /g, '_'))}`],
+    ['iNaturalist', info.taxonId
+      ? `https://www.inaturalist.org/taxa/${info.taxonId}`
+      : `https://www.inaturalist.org/taxa/search?q=${q(scientificName)}`],
+    ['xeno-canto recordings', `https://xeno-canto.org/species/${scientificName.replace(/ /g, '-')}`],
+    ['YouTube: songs & calls', `https://www.youtube.com/results?search_query=${q(`${commonName} bird song`)}`],
+    ['YouTube: how to identify', `https://www.youtube.com/results?search_query=${q(`${commonName} bird identification`)}`],
+  ];
+  const box = h('div', 'learn');
+  const row = h('div', 'link-row');
+  for (const [text, href] of links) {
+    const a = h('a', 'link-chip', `${text} ↗`);
+    a.href = href;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    row.append(a);
+  }
+  box.append(h('h4', '', 'Learn more'), row);
+  return box;
 }
 
 function renderFacts(info) {
@@ -781,14 +902,57 @@ function renderFacts(info) {
   return facts;
 }
 
-function openLightbox(photo, commonName) {
-  const box = els.lightbox;
-  box.querySelector('img').src = photo.full;
-  box.querySelector('img').alt = `${commonName}${photo.label ? `, ${photo.label.toLowerCase()}` : ''}`;
-  box.querySelector('.caption').textContent = [commonName, photo.label, photo.credit].filter(Boolean).join(' · ');
-  box.showModal();
+/* Photo viewer: swipe, arrow keys or ‹ › to browse; tap the photo to see it at full resolution. */
+const lightbox = {
+  photos: [], index: 0, name: '', touchX: null, focus: null,
+  box: els.lightbox,
+  stage: els.lightbox.querySelector('.lb-stage'),
+  img: els.lightbox.querySelector('img'),
+};
+
+function openLightbox(photos, index, commonName) {
+  Object.assign(lightbox, { photos, name: commonName });
+  showPhoto(index);
+  lightbox.box.showModal();
 }
 
+function showPhoto(index) {
+  const { photos, name, box, img } = lightbox;
+  lightbox.index = (index + photos.length) % photos.length;
+  const photo = photos[lightbox.index];
+  setZoom(false);
+  img.src = photo.full;
+  img.alt = `${name}${photo.label ? `, ${photo.label.toLowerCase()}` : ''}`;
+  box.querySelector('.caption').textContent = [name, photo.label, photo.credit].filter(Boolean).join(' · ');
+  box.querySelector('.lb-count').textContent = photos.length > 1 ? `${lightbox.index + 1} / ${photos.length}` : '';
+  box.querySelector('.lb-full').href = photo.original || photo.full;
+  box.classList.toggle('single', photos.length < 2);
+  // Preload the neighbours so browsing feels instant.
+  if (photos.length > 1) {
+    new Image().src = photos[(lightbox.index + 1) % photos.length].full;
+    new Image().src = photos[(lightbox.index - 1 + photos.length) % photos.length].full;
+  }
+}
+
+/** Zoomed shows the original-resolution photo at its natural size, scrolled to where it was tapped. */
+function setZoom(on, focus = null) {
+  const { stage, img } = lightbox;
+  stage.classList.toggle('zoomed', on);
+  lightbox.focus = on ? focus : null;
+  const photo = lightbox.photos[lightbox.index];
+  if (!on) stage.scrollTo(0, 0);
+  else if (photo?.original && img.src !== photo.original) img.src = photo.original; // scrolls on load
+  else scrollToFocus();
+}
+
+function scrollToFocus() {
+  const { stage, focus } = lightbox;
+  if (!focus) return;
+  stage.scrollLeft = focus.x * stage.scrollWidth - stage.clientWidth / 2;
+  stage.scrollTop = focus.y * stage.scrollHeight - stage.clientHeight / 2;
+}
+
+const DOWNLOAD_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5v8M4.5 7 8 10.5 11.5 7M3 13.5h10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const PLAY_ICON = '<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5v11l9-5.5z" fill="currentColor"/></svg>';
 const STOP_ICON = '<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="3.5" y="3.5" width="9" height="9" rx="1" fill="currentColor"/></svg>';
 
@@ -796,6 +960,7 @@ const STOP_ICON = '<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rec
 const refAudio = {
   el: new Audio(),
   button: null,
+  url: null,
   quietUntil: 0,
 
   toggle(button, url) {
@@ -805,6 +970,7 @@ const refAudio = {
     }
     this.stop();
     this.button = button;
+    this.url = url;
     button.classList.add('playing');
     button.querySelector('.icon').outerHTML = STOP_ICON;
     this.el.src = url;
@@ -822,9 +988,18 @@ const refAudio = {
       this.button.style.setProperty('--p', '0%');
       this.button.querySelector('.icon').outerHTML = PLAY_ICON;
       this.button = null;
+      this.url = null;
       // Let the 3 s analysis window clear the playback before detecting again.
       this.quietUntil = Date.now() + 3500;
     }
+  },
+
+  /** Moves the playing state onto a re-rendered button for the same sound. */
+  adopt(button, url) {
+    if (!this.button || this.url !== url) return;
+    this.button = button;
+    button.classList.add('playing');
+    button.querySelector('.icon').outerHTML = STOP_ICON;
   },
 
   blocking() {
@@ -1047,6 +1222,11 @@ els.noiseFilter.addEventListener('change', () => {
   saveSetting('birdsong.noiseFilter', state.noiseFilter);
   audio.filter?.setCutoff(noiseCutoff());
 });
+els.clipsToggle.checked = state.keepClips;
+els.clipsToggle.addEventListener('change', () => {
+  state.keepClips = els.clipsToggle.checked;
+  saveSetting('birdsong.clips', state.keepClips ? '1' : '0');
+});
 els.geoToggle.checked = loadNumber('birdsong.geo', 0) === 1;
 els.geoToggle.addEventListener('change', () => (els.geoToggle.checked ? enableGeo() : disableGeo()));
 document.addEventListener('visibilitychange', () => {
@@ -1057,8 +1237,31 @@ if (!window.isSecureContext) {
   setStatus('Needs HTTPS or localhost', 'error');
   els.hint.textContent = 'Browsers only allow microphone access on https:// pages or http://localhost.';
 }
-els.lightbox.addEventListener('click', e => {
-  if (e.target === els.lightbox) els.lightbox.close(); // click on backdrop
+lightbox.box.querySelector('.prev').addEventListener('click', () => showPhoto(lightbox.index - 1));
+lightbox.box.querySelector('.next').addEventListener('click', () => showPhoto(lightbox.index + 1));
+lightbox.box.addEventListener('keydown', e => {
+  if (e.key === 'ArrowLeft') showPhoto(lightbox.index - 1);
+  else if (e.key === 'ArrowRight') showPhoto(lightbox.index + 1);
+});
+lightbox.stage.addEventListener('click', e => {
+  if (e.target === lightbox.img) {
+    const r = lightbox.img.getBoundingClientRect();
+    setZoom(!lightbox.stage.classList.contains('zoomed'), { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height });
+  } else if (e.target === lightbox.stage) {
+    lightbox.box.close(); // tap on the dark area around the photo
+  }
+});
+lightbox.img.addEventListener('load', scrollToFocus);
+lightbox.stage.addEventListener('touchstart', e => {
+  // One finger, not zoomed (by us or by pinching the page): a swipe browses.
+  const zoomed = lightbox.stage.classList.contains('zoomed') || (window.visualViewport?.scale ?? 1) > 1.01;
+  lightbox.touchX = e.touches.length === 1 && !zoomed ? e.touches[0].clientX : null;
+}, { passive: true });
+lightbox.stage.addEventListener('touchend', e => {
+  if (lightbox.touchX == null) return;
+  const dx = e.changedTouches[0].clientX - lightbox.touchX;
+  lightbox.touchX = null;
+  if (Math.abs(dx) > 50) showPhoto(lightbox.index + (dx < 0 ? 1 : -1));
 });
 
 const recordings = createRecordings({

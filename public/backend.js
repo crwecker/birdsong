@@ -116,14 +116,15 @@ function browserBackend() {
 
     async birdInfo(sci, commonName) {
       const cached = await idb(db, 'details', s => s.get(sci)).catch(() => null);
-      if (cached && Date.now() - cached.fetchedAt < DETAILS_TTL_MS) return cached;
-      const [photos, sounds, wiki] = await Promise.all([
-        inat.getPhotos(sci, getJson).catch(() => []),
+      if (cached && cached.version === inat.INFO_VERSION && Date.now() - cached.fetchedAt < DETAILS_TTL_MS) return cached;
+      const [{ photos, taxonId }, sounds, wiki] = await Promise.all([
+        inat.getPhotos(sci, getJson).catch(() => ({ photos: [], taxonId: null })),
         inat.iNatSounds(sci, getJson).catch(() => []),
         inat.getWikipedia(sci, getJson).catch(() => null),
       ]);
       const info = {
-        scientificName: sci, commonName, photos,
+        version: inat.INFO_VERSION,
+        scientificName: sci, commonName, photos, taxonId,
         sounds, soundsSource: 'inaturalist',
         facts: wiki?.extract ? { summary: wiki.extract } : null,
         factsSource: wiki?.extract ? 'wikipedia' : null,
@@ -263,7 +264,7 @@ async function idb(dbPromise, storeName, fn, mode = 'readonly') {
   });
 }
 
-function wavHeader(dataBytes) {
+export function wavHeader(dataBytes) {
   const b = new DataView(new ArrayBuffer(44));
   const str = (o, s) => [...s].forEach((c, i) => b.setUint8(o + i, c.charCodeAt(0)));
   str(0, 'RIFF');

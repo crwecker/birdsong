@@ -158,6 +158,13 @@
       </label>
       <label class="row">
         <span>
+          Keep clips of each bird
+          <small>Saves the 3 seconds of audio behind each identification (the strongest few per bird) so you can play them under Details. Kept until you clear the list or close the page.</small>
+        </span>
+        <input type="checkbox" id="clipsToggle" class="switch">
+      </label>
+      <label class="row">
+        <span>
           Only species expected near me
           <small id="geoNote">Uses your location and the time of year to rule out unlikely birds.</small>
         </span>
@@ -194,7 +201,10 @@
           <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5.5 5.5l9 9M14.5 5.5l-9 9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
         </button>
       </div>
-      <div class="detail" hidden></div>
+      <div class="detail" hidden>
+        <div class="heard" hidden></div>
+        <div class="ref"></div>
+      </div>
     </li>
   </template>
 
@@ -212,9 +222,17 @@
   </template>
 
   <dialog id="lightbox" class="lightbox">
-    <form method="dialog"><button class="close" aria-label="Close">×</button></form>
-    <img alt="">
-    <p class="caption"></p>
+    <div class="lb-stage">
+      <img alt="">
+      <button type="button" class="lb-nav prev" aria-label="Previous photo">‹</button>
+      <button type="button" class="lb-nav next" aria-label="Next photo">›</button>
+    </div>
+    <div class="lb-bar">
+      <span class="lb-count"></span>
+      <p class="caption"></p>
+      <a class="lb-full" target="_blank" rel="noopener">Full size ↗</a>
+    </div>
+    <form method="dialog"><button class="close" aria-label="Close" autofocus>×</button></form>
   </dialog>
 
   <script src="app.js" type="module"></script>

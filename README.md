@@ -19,9 +19,15 @@ pages or `http://localhost`, so deploy `public/` behind HTTPS if you host it els
 - **Live identification**: analyzes the last 3 seconds of audio every second and shows the
   top candidates with confidence bars.
 - **Session log**: every species identified, with best confidence and number of encounters. Per bird:
-  - **Details**: male/female photos (tap to enlarge), reference recordings to play in place, and
-    notes: voice, field marks, male vs. female, look-alikes, fun facts. Detection pauses while a
-    reference sound plays so the mic doesn't "hear" it.
+  - **Details**: up to 10 photos (male/female first, then iNaturalist's curated set) in a full-screen
+    viewer: swipe or use ‹ › / arrow keys to browse, tap a photo to zoom to full resolution, or open
+    the original. Reference recordings play in place, followed by notes (voice, field marks, male vs.
+    female, look-alikes, fun facts) and links to All About Birds, Wikipedia, iNaturalist, xeno-canto
+    and YouTube. Detection pauses while a sound plays so the mic doesn't "hear" it.
+  - **Heard clips** (Settings › Keep clips of each bird, on by default): the 3 s of audio behind each
+    identification, the strongest window per encounter, up to 4 per bird. Clips are volume-normalized,
+    play from Details, and can be downloaded as WAV. They stay in memory until you clear the list or
+    close the page.
   - **Save**: records a verified sighting in **My sightings** (stored in `data/sightings.json`).
   - **Skip**: hides the bird for the rest of the session. **×** removes it until it's heard again.
 - **Live spectrogram** with a label at the moment each new bird is detected.
