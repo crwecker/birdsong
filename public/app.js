@@ -177,6 +177,7 @@ const audio = {
 async function startListening() {
   if (state.listening) return;
   setListeningUI(true);
+  flagMic(false);
   setStatus('Requesting microphone…');
   // Create and resume the AudioContext synchronously inside the click handler.
   // Doing it after awaiting getUserMedia loses the user gesture, and browsers
@@ -234,8 +235,14 @@ async function startListening() {
     stopListening();
     const denied = err && (err.name === 'NotAllowedError' || err.name === 'SecurityError');
     setStatus(denied ? 'Microphone blocked' : `Mic error: ${err.message}`, 'error');
+    if (!denied) flagMic(true);
     if (denied) els.hint.textContent = 'Allow microphone access in your browser’s site settings, then try again.';
   }
+}
+
+/** The mic picker stays discreet unless the mic seems to be the problem. */
+function flagMic(on) {
+  els.micSelect.closest('.mic-pick').classList.toggle('attention', on);
 }
 
 async function openMic(deviceId) {
@@ -346,10 +353,12 @@ function checkSignal() {
   }
   if (audio.chunks === 0) {
     audio.warned = true;
+    flagMic(true);
     setStatus('Audio paused by browser', 'error');
     els.hint.textContent = 'The browser hasn’t started audio processing. Click Stop listening, then Start listening again.';
   } else if (audio.peak === 0 && audio.lastPeak === 0) {
     audio.warned = true;
+    flagMic(true);
     setStatus('Mic is sending silence', 'error');
     els.hint.textContent = navigator.platform.startsWith('Mac')
       ? 'Your browser is receiving pure silence. Open System Settings › Privacy & Security › Microphone, make sure your browser is switched on (then restart it), and check the input device in System Settings › Sound.'
@@ -794,17 +803,27 @@ async function renderDetail(container, scientificName) {
   }
   container.replaceChildren();
 
-  if (info.photos.length) {
+  // The range map leads the rail and opens in the viewer like a photo.
+  const slides = [...(info.taxonId ? [{ map: true }] : []), ...info.photos];
+  if (slides.length) {
     const strip = h('div', 'photo-strip');
-    info.photos.forEach((photo, n) => {
+    slides.forEach((slide, n) => {
       const btn = h('button', 'photo');
       btn.type = 'button';
-      btn.title = photo.credit || '';
-      btn.setAttribute('aria-label', `${photo.label || 'Photo'}, enlarge`);
-      setBackground(btn, photo.thumb);
-      if (photo.label) btn.append(h('span', 'sex', `${photo.label === 'Male' ? '♂' : '♀'} ${photo.label}`));
-      btn.addEventListener('click', () => openLightbox(info.photos, n, info.commonName));
+      btn.addEventListener('click', () => openLightbox(slides, n, info));
       strip.append(btn);
+      if (slide.map) {
+        btn.classList.add('map-thumb');
+        btn.setAttribute('aria-label', 'Range map, enlarge');
+        // Drawn once laid out, so the map is fitted to the tile's real size.
+        requestAnimationFrame(() => btn.prepend(renderMap(info, btn.clientWidth || 168, btn.clientHeight || 126)));
+        btn.append(h('span', 'sex', 'Range map'));
+        return;
+      }
+      btn.title = slide.credit || '';
+      btn.setAttribute('aria-label', `${slide.label || 'Photo'}, enlarge`);
+      setBackground(btn, slide.thumb);
+      if (slide.label) btn.append(h('span', 'sex', `${slide.label === 'Male' ? '♂' : '♀'} ${slide.label}`));
     });
     container.append(strip);
   }
@@ -883,10 +902,12 @@ function renderFacts(info) {
     facts.append(h('p', 'summary', f.summary));
     return facts;
   }
-  const section = (title, content) => {
+  const section = (title, content, asParagraphs = false) => {
     if (!content || (Array.isArray(content) && !content.length)) return;
     facts.append(h('h4', '', title));
-    if (Array.isArray(content)) {
+    if (Array.isArray(content) && asParagraphs) {
+      content.forEach(item => facts.append(h('p', '', item)));
+    } else if (Array.isArray(content)) {
       const ul = h('ul');
       content.forEach(item => ul.append(h('li', '', item)));
       facts.append(ul);
@@ -894,62 +915,160 @@ function renderFacts(info) {
       facts.append(h('p', '', content));
     }
   };
-  section('Voice', f.voice);
-  section('Field marks', f.fieldMarks);
+  // Where it lives is on the map; the notes stick to how to recognize it.
+  if (f.sections) { // excerpts from the Wikipedia article
+    section('What it sounds like', f.sections.voice, true);
+    section('Behavior', f.sections.behavior, true);
+    section('What to look for', f.sections.looks, true);
+    return facts;
+  }
+  section('What it sounds like', f.voice);
+  section('ID tricks', f.idTips);
+  section('Behavior', f.behaviors);
   section('Male vs. female', f.maleVsFemale);
   section('Easily confused with', f.confusedWith);
   section('Fun facts', f.funFacts);
   return facts;
 }
 
-/* Photo viewer: swipe, arrow keys or ‹ › to browse; tap the photo to see it at full resolution. */
+/* Range map: static map tiles positioned in percentages, so the map scales with its box. */
+const TILE = 256;
+
+/** Web Mercator at zoom 0, in tile pixels. */
+const mercX = lng => ((lng + 180) / 360) * TILE;
+function mercY(lat) {
+  const s = Math.sin((Math.max(-85, Math.min(85, lat)) * Math.PI) / 180);
+  return (0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * TILE;
+}
+
+/** A `width` x `height` (CSS px) map fitted to where most sightings are; the world without a sample. */
+function renderMap(info, width, height) {
+  const MAP_W = width;
+  const MAP_H = height;
+  const b = info.mapBounds;
+  let zoom = 0;
+  let cx = TILE / 2;
+  let cy = mercY(20);
+  if (b) {
+    const [x0, x1, y0, y1] = [mercX(b.west), mercX(b.east), mercY(b.north), mercY(b.south)];
+    const fit = Math.min(MAP_W / (1.3 * Math.max(x1 - x0, 0.05)), MAP_H / (1.3 * Math.max(y1 - y0, 0.05)));
+    zoom = Math.max(0, Math.min(7, Math.floor(Math.log2(fit))));
+    cx = (x0 + x1) / 2;
+    cy = (y0 + y1) / 2;
+  }
+  const scale = 2 ** zoom;
+  cx *= scale;
+  cy = TILE * scale <= MAP_H ? TILE * scale / 2 // nothing past the poles
+    : Math.max(MAP_H / 2, Math.min(TILE * scale - MAP_H / 2, cy * scale));
+  const left = cx - MAP_W / 2;
+  const top = cy - MAP_H / 2;
+  const pct = (v, of) => `${((v / of) * 100).toFixed(3)}%`;
+
+  const layers = [
+    (z, x, y) => `https://tile.openstreetmap.org/${z}/${x}/${y}.png`, // greyed out in CSS
+    (z, x, y) => `https://tiles.inaturalist.org/v1/taxon_ranges/${info.taxonId}/${z}/${x}/${y}.png`,
+    (z, x, y) => `https://api.inaturalist.org/v1/grid/${z}/${x}/${y}.png?taxon_id=${info.taxonId}&verifiable=true`,
+  ];
+  const map = h('div', 'range-map');
+  map.style.aspectRatio = `${MAP_W} / ${MAP_H}`;
+  for (const url of layers) {
+    const layer = h('div', 'layer');
+    for (let ty = Math.floor(top / TILE); ty <= Math.floor((top + MAP_H - 1) / TILE); ty++) {
+      if (ty < 0 || ty >= scale) continue;
+      for (let tx = Math.floor(left / TILE); tx <= Math.floor((left + MAP_W - 1) / TILE); tx++) {
+        const img = h('img');
+        img.alt = '';
+        img.loading = 'lazy';
+        img.src = url(zoom, ((tx % scale) + scale) % scale, ty); // tiles repeat east-west
+        img.style.cssText = `left:${pct(tx * TILE - left, MAP_W)};top:${pct(ty * TILE - top, MAP_H)};` +
+          `width:${pct(TILE, MAP_W)};height:${pct(TILE, MAP_H)}`;
+        img.onerror = () => img.remove(); // most species have no published range map
+        layer.append(img);
+      }
+    }
+    map.append(layer);
+  }
+
+  if (state.position) {
+    const y = mercY(state.position.latitude) * scale - top;
+    const world = TILE * scale;
+    const x = [0, world, -world].map(d => mercX(state.position.longitude) * scale + d - left).find(v => v >= 0 && v <= MAP_W);
+    if (x != null && y >= 0 && y <= MAP_H) {
+      const dot = h('span', 'you');
+      dot.title = 'You are here';
+      dot.style.cssText = `left:${pct(x, MAP_W)};top:${pct(y, MAP_H)}`;
+      map.append(dot);
+      map.dataset.you = '1';
+    }
+  }
+  map.append(h('span', 'map-credit', '© OpenStreetMap'));
+  return map;
+}
+
+/** Key and links shown under the enlarged map. */
+function mapCaption(info, map) {
+  const legend = h('span', 'map-legend');
+  legend.innerHTML = '<span class="key range"></span>Range <span class="key obs"></span>Sightings' +
+    (map.dataset.you ? ' <span class="key me"></span>You' : '');
+  const link = (text, href) => {
+    const a = h('a', '', text);
+    a.href = href;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    return a;
+  };
+  legend.append(link('Explore map ↗', `https://www.inaturalist.org/observations?taxon_id=${info.taxonId}&subview=map`));
+  return legend;
+}
+
+/* Photo viewer: full-resolution photos to pinch-zoom; swipe, arrow keys or ‹ › to browse. */
 const lightbox = {
-  photos: [], index: 0, name: '', touchX: null, focus: null,
+  photos: [], index: 0, info: null, touchX: null,
   box: els.lightbox,
   stage: els.lightbox.querySelector('.lb-stage'),
   img: els.lightbox.querySelector('img'),
 };
 
-function openLightbox(photos, index, commonName) {
-  Object.assign(lightbox, { photos, name: commonName });
+/** `photos` are the rail's slides: photos, and possibly the range map (`{ map: true }`). */
+function openLightbox(photos, index, info) {
+  Object.assign(lightbox, { photos, info });
+  lightbox.box.showModal(); // first, so the stage has a size to fit the map to
   showPhoto(index);
-  lightbox.box.showModal();
 }
 
 function showPhoto(index) {
-  const { photos, name, box, img } = lightbox;
+  const { photos, info, box, img, stage } = lightbox;
+  const name = info.commonName;
   lightbox.index = (index + photos.length) % photos.length;
   const photo = photos[lightbox.index];
-  setZoom(false);
+  box.querySelector('.lb-count').textContent = photos.length > 1 ? `${lightbox.index + 1} / ${photos.length}` : '';
+  box.classList.toggle('single', photos.length < 2);
+  stage.querySelector('.range-map')?.remove();
+  img.hidden = !!photo.map;
+  if (photo.map) {
+    // Redrawn at the viewer's size so it zooms in further than the thumbnail.
+    const w = stage.clientWidth;
+    const map = renderMap(info, w, Math.min(stage.clientHeight, Math.round(w * 0.75)));
+    stage.prepend(map);
+    box.querySelector('.caption').replaceChildren(mapCaption(info, map));
+    return;
+  }
+  // Show the 1024 px version (usually preloaded) at once, then swap in the original.
   img.src = photo.full;
+  if (photo.original && photo.original !== photo.full) {
+    const original = new Image();
+    original.onload = () => {
+      if (lightbox.photos[lightbox.index] === photo) img.src = photo.original;
+    };
+    original.src = photo.original;
+  }
   img.alt = `${name}${photo.label ? `, ${photo.label.toLowerCase()}` : ''}`;
   box.querySelector('.caption').textContent = [name, photo.label, photo.credit].filter(Boolean).join(' · ');
-  box.querySelector('.lb-count').textContent = photos.length > 1 ? `${lightbox.index + 1} / ${photos.length}` : '';
-  box.querySelector('.lb-full').href = photo.original || photo.full;
-  box.classList.toggle('single', photos.length < 2);
   // Preload the neighbours so browsing feels instant.
-  if (photos.length > 1) {
-    new Image().src = photos[(lightbox.index + 1) % photos.length].full;
-    new Image().src = photos[(lightbox.index - 1 + photos.length) % photos.length].full;
+  for (const d of [1, -1]) {
+    const next = photos[(lightbox.index + d + photos.length) % photos.length];
+    if (next.full) new Image().src = next.full;
   }
-}
-
-/** Zoomed shows the original-resolution photo at its natural size, scrolled to where it was tapped. */
-function setZoom(on, focus = null) {
-  const { stage, img } = lightbox;
-  stage.classList.toggle('zoomed', on);
-  lightbox.focus = on ? focus : null;
-  const photo = lightbox.photos[lightbox.index];
-  if (!on) stage.scrollTo(0, 0);
-  else if (photo?.original && img.src !== photo.original) img.src = photo.original; // scrolls on load
-  else scrollToFocus();
-}
-
-function scrollToFocus() {
-  const { stage, focus } = lightbox;
-  if (!focus) return;
-  stage.scrollLeft = focus.x * stage.scrollWidth - stage.clientWidth / 2;
-  stage.scrollTop = focus.y * stage.scrollHeight - stage.clientHeight / 2;
 }
 
 const DOWNLOAD_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5v8M4.5 7 8 10.5 11.5 7M3 13.5h10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
@@ -1244,17 +1363,11 @@ lightbox.box.addEventListener('keydown', e => {
   else if (e.key === 'ArrowRight') showPhoto(lightbox.index + 1);
 });
 lightbox.stage.addEventListener('click', e => {
-  if (e.target === lightbox.img) {
-    const r = lightbox.img.getBoundingClientRect();
-    setZoom(!lightbox.stage.classList.contains('zoomed'), { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height });
-  } else if (e.target === lightbox.stage) {
-    lightbox.box.close(); // tap on the dark area around the photo
-  }
+  if (e.target === lightbox.stage) lightbox.box.close(); // tap on the dark area around the photo
 });
-lightbox.img.addEventListener('load', scrollToFocus);
 lightbox.stage.addEventListener('touchstart', e => {
-  // One finger, not zoomed (by us or by pinching the page): a swipe browses.
-  const zoomed = lightbox.stage.classList.contains('zoomed') || (window.visualViewport?.scale ?? 1) > 1.01;
+  // One finger on an unzoomed page: a swipe browses.
+  const zoomed = (window.visualViewport?.scale ?? 1) > 1.01;
   lightbox.touchX = e.touches.length === 1 && !zoomed ? e.touches[0].clientX : null;
 }, { passive: true });
 lightbox.stage.addEventListener('touchend', e => {

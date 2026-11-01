@@ -19,11 +19,15 @@ pages or `http://localhost`, so deploy `public/` behind HTTPS if you host it els
 - **Live identification**: analyzes the last 3 seconds of audio every second and shows the
   top candidates with confidence bars.
 - **Session log**: every species identified, with best confidence and number of encounters. Per bird:
-  - **Details**: up to 10 photos (male/female first, then iNaturalist's curated set) in a full-screen
-    viewer: swipe or use ‹ › / arrow keys to browse, tap a photo to zoom to full resolution, or open
-    the original. Reference recordings play in place, followed by notes (voice, field marks, male vs.
-    female, look-alikes, fun facts) and links to All About Birds, Wikipedia, iNaturalist, xeno-canto
-    and YouTube. Detection pauses while a sound plays so the mic doesn't "hear" it.
+  - **Details**: up to 10 photos (male/female first, then iNaturalist's curated set) that open in a
+    full-screen, full-resolution viewer (swipe or ‹ › / arrow keys to browse, pinch to zoom).
+    The first tile is a **range map**: the expert range and iNaturalist sightings over OpenStreetMap,
+    fitted to where most sightings are, with your position when the location filter is on; it opens
+    in the same viewer, redrawn at screen size. Reference recordings play in place. The notes skip range and focus on recognizing the
+    bird: what it sounds like, behavior and what to look for (from Wikipedia), or with Claude: ID
+    tricks, behaviors, male vs. female, look-alikes and fun facts. Then links to All About Birds,
+    Wikipedia, iNaturalist, xeno-canto and YouTube. Detection pauses while a sound plays so the mic
+    doesn't "hear" it.
   - **Heard clips** (Settings › Keep clips of each bird, on by default): the 3 s of audio behind each
     identification, the strongest window per encounter, up to 4 per bird. Clips are volume-normalized,
     play from Details, and can be downloaded as WAV. They stay in memory until you clear the list or
@@ -41,7 +45,8 @@ pages or `http://localhost`, so deploy `public/` behind HTTPS if you host it els
   bars: drag or use the overview strip to move around, ctrl/⌘+scroll or −/+ to zoom, click to seek,
   click a bar to hear that detection. **Find birds** re-runs identification over the whole file.
 - **Microphone picker**: choose any input device; the choice is remembered, and switching while
-  listening takes effect immediately.
+  listening takes effect immediately. It sits quietly under the listen button and turns into a
+  highlighted picker when the mic fails or sends only silence.
 - **Sensitivity**: minimum confidence defaults to 15%, with 3 s windows analyzed every 0.5 s (live and
   in recordings). On a noisy test soundscape this caught 2.5-3x more birdsong than 25% with
   back-to-back windows. Turn on the location filter to weed out the extra out-of-range guesses.
@@ -75,7 +80,7 @@ ANTHROPIC_API_KEY=sk-ant-... XC_API_KEY=... npm start
 
 | Variable | Without it | With it |
 | --- | --- | --- |
-| `ANTHROPIC_API_KEY` | Notes are the Wikipedia summary | Claude writes field-guide notes: voice, field marks, male vs. female, look-alikes, fun facts (one call per species, cached) |
+| `ANTHROPIC_API_KEY` | Notes are excerpts from the Wikipedia article (voice, behavior, appearance) | Claude writes field-guide notes: voice, ID tricks, behaviors, male vs. female, look-alikes, fun facts (one call per species, cached) |
 | `XC_API_KEY` ([free xeno-canto key](https://xeno-canto.org/explore/api)) | Recordings from iNaturalist, mostly unlabeled | Recordings labelled song / call / alarm call / flight call, with lengths |
 
 Details are cached for 30 days in `data/cache/`; adding a key upgrades cached entries automatically.

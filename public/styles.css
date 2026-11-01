@@ -132,21 +132,45 @@ main {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  margin-top: 16px;
-  font-size: 14px;
+  margin-top: 12px;
+  font-size: 12px;
   color: var(--muted);
 }
+.mic-icon { width: 13px; height: 13px; margin-right: -6px; opacity: 0.7; }
+.mic-pick.attention .mic-icon { display: none; }
+/* Discreet by default: the label is for screen readers and the select reads as plain text. */
+.mic-pick > span {
+  position: absolute;
+  width: 1px; height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
 .mic-pick select {
-  max-width: min(280px, 62vw);
-  padding: 6px 28px 6px 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' fill='none' stroke='%23889488' stroke-width='1.6'/%3E%3C/svg%3E") no-repeat right 10px center / 10px;
-  color: var(--text);
+  max-width: min(240px, 62vw);
+  padding: 2px 18px 2px 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' fill='none' stroke='%23889488' stroke-width='1.6'/%3E%3C/svg%3E") no-repeat right 6px center / 8px;
+  color: var(--muted);
   font: inherit;
   text-overflow: ellipsis;
   appearance: none;
   cursor: pointer;
+  opacity: 0.8;
+}
+/* When the mic is sending nothing or failed, make switching it obvious. */
+.mic-pick.attention { margin-top: 16px; font-size: 14px; color: var(--danger); }
+.mic-pick.attention > span { position: static; width: auto; height: auto; clip-path: none; }
+.mic-pick.attention select {
+  max-width: min(280px, 62vw);
+  padding: 6px 28px 6px 10px;
+  border-color: var(--danger);
+  background-color: var(--surface);
+  background-position: right 10px center;
+  background-size: 10px;
+  color: var(--text);
+  opacity: 1;
 }
 .mic-pick select:hover, .select:hover { border-color: var(--accent); }
 .select {
@@ -406,6 +430,48 @@ ul { list-style: none; margin: 0; padding: 0; }
 }
 .clip-dl svg { width: 15px; height: 15px; }
 .clip-dl:hover { color: var(--accent); background: var(--surface); }
+.range-map {
+  position: relative;
+  overflow: hidden;
+  background: var(--border);
+}
+.map-thumb { overflow: hidden; }
+.map-thumb .range-map { position: absolute; inset: 0; pointer-events: none; }
+.map-thumb .map-credit { top: 0; bottom: auto; border-radius: 0 0 0 4px; }
+.lb-stage .range-map { width: 100%; max-height: 100%; }
+.lb-stage img[hidden] { display: none; }
+.range-map .layer { position: absolute; inset: 0; }
+.range-map .layer img { position: absolute; display: block; max-width: none; }
+.range-map .layer:first-child { filter: grayscale(1) contrast(0.7) brightness(1.12); } /* quiet base map */
+.range-map .layer:nth-child(2) { opacity: 0.55; } /* expert range, under the sightings */
+@media (prefers-color-scheme: dark) {
+  .range-map .layer:first-child { filter: grayscale(1) invert(1) contrast(0.75) brightness(0.85); }
+}
+.range-map .you {
+  position: absolute;
+  width: 12px; height: 12px;
+  margin: -6px 0 0 -6px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: #2b7bf3;
+  box-shadow: 0 0 0 3px rgb(43 123 243 / 30%);
+}
+.map-credit {
+  position: absolute;
+  right: 0; bottom: 0;
+  padding: 1px 5px;
+  border-top-left-radius: 4px;
+  background: rgb(255 255 255 / 70%);
+  color: #333;
+  font-size: 9px;
+  text-decoration: none;
+}
+.map-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.map-legend a { color: #fff; margin-left: 8px; }
+.map-legend .key { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
+.map-legend .key.range { background: #f4b3cf; }
+.map-legend .key.obs { background: #f86b1e; margin-left: 6px; }
+.map-legend .key.me { background: #2b7bf3; border-radius: 50%; margin-left: 6px; }
 .link-row { display: flex; flex-wrap: wrap; gap: 6px; }
 .link-chip {
   padding: 4px 10px;
@@ -439,7 +505,7 @@ ul { list-style: none; margin: 0; padding: 0; }
 .saved-item .stats { font-size: 13px; color: var(--muted); }
 .saved-item .act { padding: 0; }
 
-/* Photo viewer: full screen, browsable, tap to zoom to full resolution */
+/* Photo viewer: full screen, full resolution, browsable */
 .lightbox {
   width: 100%;
   height: 100%;
@@ -465,10 +531,7 @@ ul { list-style: none; margin: 0; padding: 0; }
   max-width: 100%;
   max-height: 100%;
   object-fit: contain;
-  cursor: zoom-in;
 }
-.lb-stage.zoomed { display: block; overflow: auto; }
-.lb-stage.zoomed img { max-width: none; max-height: none; cursor: zoom-out; }
 .lb-nav {
   position: absolute;
   top: 50%;
@@ -485,7 +548,7 @@ ul { list-style: none; margin: 0; padding: 0; }
 .lb-nav:hover { background: rgb(0 0 0 / 70%); }
 .lb-nav.prev { left: 8px; }
 .lb-nav.next { right: 8px; }
-.lightbox.single .lb-nav, .lb-stage.zoomed .lb-nav { display: none; }
+.lightbox.single .lb-nav { display: none; }
 .lb-bar {
   display: flex;
   align-items: center;
@@ -505,7 +568,6 @@ ul { list-style: none; margin: 0; padding: 0; }
 }
 .lb-count { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .lb-count:empty { display: none; }
-.lb-full { color: #fff; white-space: nowrap; font-weight: 600; }
 .lightbox .close {
   position: absolute;
   top: calc(10px + env(safe-area-inset-top));

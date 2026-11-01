@@ -117,16 +117,16 @@ function browserBackend() {
     async birdInfo(sci, commonName) {
       const cached = await idb(db, 'details', s => s.get(sci)).catch(() => null);
       if (cached && cached.version === inat.INFO_VERSION && Date.now() - cached.fetchedAt < DETAILS_TTL_MS) return cached;
-      const [{ photos, taxonId }, sounds, wiki] = await Promise.all([
-        inat.getPhotos(sci, getJson).catch(() => ({ photos: [], taxonId: null })),
+      const [{ photos, taxonId, mapBounds }, sounds, wiki] = await Promise.all([
+        inat.getTaxonMedia(sci, getJson).catch(() => ({ photos: [], taxonId: null, mapBounds: null })),
         inat.iNatSounds(sci, getJson).catch(() => []),
         inat.getWikipedia(sci, getJson).catch(() => null),
       ]);
       const info = {
         version: inat.INFO_VERSION,
-        scientificName: sci, commonName, photos, taxonId,
+        scientificName: sci, commonName, photos, taxonId, mapBounds,
         sounds, soundsSource: 'inaturalist',
-        facts: wiki?.extract ? { summary: wiki.extract } : null,
+        facts: inat.wikiFacts(wiki),
         factsSource: wiki?.extract ? 'wikipedia' : null,
         wikiUrl: wiki?.url ?? null,
         fetchedAt: Date.now(),
