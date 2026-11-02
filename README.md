@@ -41,7 +41,10 @@ pages or `http://localhost`, so deploy `public/` behind HTTPS if you host it els
   - **Skip**: hides the bird for the rest of the session. **×** removes it until it's heard again.
 - **Live spectrogram** with a label at the moment each new bird is detected.
 - **Location filter** (optional): BirdNET's range model uses your location and the week of the year
-  to drop species that wouldn't plausibly be there. This removes most false positives.
+  to drop species that wouldn't plausibly be there. This removes most false positives. The note
+  under the switch shows the position in use (and flags a vague, IP-based fix), and species the
+  filter hides still appear greyed in the live list with their range score, so its decisions
+  can be checked.
 - **Session recording**: **Record** captures exactly what the model hears (48 kHz mono WAV), along
   with the timestamps of live detections. Audio streams to the server every few seconds, so long
   sessions don't build up in browser memory and a closed tab still leaves a usable file.
@@ -58,6 +61,12 @@ pages or `http://localhost`, so deploy `public/` behind HTTPS if you host it els
 - **Noise filter** (optional): a 150 Hz high-pass for steady traffic or hum. In quiet or windy
   conditions filtering made detection worse (the model is trained on unfiltered audio), so it's off
   by default.
+
+## Tests
+
+```bash
+npm test   # needs `npm install` first: the tests run the downloaded BirdNET range model
+```
 
 ## Two ways to run it
 

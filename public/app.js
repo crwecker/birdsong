@@ -17,7 +17,8 @@ const INFER_INTERVAL_MS = 500; // slide the window by ~0.5 s so calls land well 
 // model is trained on unfiltered recordings), so it's off by default.
 const NOISE_FILTERS = { off: 0, traffic: 150 };
 const MAYBE_FLOOR = 0.1; // show weaker candidates (greyed) above this
-const GEO_MIN = 0.03; // area-model score below which a species is ruled out
+const { GEO_MIN, birdnetWeek } = globalThis.BirdsongGeo; // shared with worker.js (geo.js)
+const COARSE_FIX_M = 25_000; // a location fix this vague is probably IP-based; say so
 const NEW_ENCOUNTER_GAP_MS = 5000; // detections closer than this count as one
 const CLIPS_PER_BIRD = 4; // playable clips kept per species (one per encounter, strongest first to go last)
 const CLIPS_PER_SIGHTING = 2; // strongest clips stored with a saved sighting (~290 KB each)
@@ -48,6 +49,7 @@ const els = {
 const state = {
   labels: [],
   geoScores: null,
+  geoWeek: null, // BirdNET week the geo scores were computed for
   threshold: loadNumber('birdsong.threshold', 0.15),
   noiseFilter: loadString('birdsong.noiseFilter') || 'off',
   keepClips: loadNumber('birdsong.clips', 1) === 1,
@@ -91,7 +93,9 @@ function startWorker() {
         if (els.geoToggle.checked) enableGeo();
         break;
       case 'area':
-        state.geoScores = data.scores;
+        // Ignore a late reply after the filter was turned off or the week moved on.
+        if (state.position?.latitude === data.latitude && state.position.longitude === data.longitude &&
+            data.week === state.geoWeek) state.geoScores = data.scores;
         break;
       case 'predict-progress':
         state.pending.get(data.id)?.onProgress?.(data.progress);
@@ -481,10 +485,17 @@ function buildColormap() {
 
 /** Species hits that pass the geo filter, strongest first. */
 function plausibleHits(hits) {
+  refreshGeoWeek();
   return hits.filter(([i]) => {
     if (!state.labels[i]?.isSpecies) return false;
     return !state.geoScores || state.geoScores[i] >= GEO_MIN;
   });
+}
+
+/** Species the location filter removed from this frame (strong enough to have been shown). */
+function hiddenByGeo(hits) {
+  if (!state.geoScores) return [];
+  return hits.filter(([i, s]) => s >= MAYBE_FLOOR && state.labels[i]?.isSpecies && state.geoScores[i] < GEO_MIN);
 }
 
 /** `clipSource` is a copy of the analysed window when clips are being kept. */
@@ -495,7 +506,8 @@ function handleLiveFrame(hits, recordedAt, clipSource) {
     return;
   }
   const candidates = plausibleHits(hits).filter(([, s]) => s >= MAYBE_FLOOR).slice(0, 5);
-  renderNow(candidates);
+  // Show what the filter hid (greyed, never logged), so its decisions can be checked.
+  renderNow(candidates, hiddenByGeo(hits).slice(0, 2));
   recordings.addLiveHits(candidates.filter(([, s]) => s >= state.threshold), recordedAt);
   for (const [i, score] of candidates) {
     if (score >= state.threshold) {
@@ -506,20 +518,22 @@ function handleLiveFrame(hits, recordedAt, clipSource) {
   }
 }
 
-function renderNow(candidates) {
+function renderNow(candidates, hidden = []) {
   els.nowList.replaceChildren();
-  if (!candidates.length) {
+  if (!candidates.length && !hidden.length) {
     els.nowList.innerHTML = '<li class="empty">No birds detected right now. Keep listening…</li>';
     return;
   }
-  for (const [i, score] of candidates) {
+  const rows = candidates.map(([i, score]) => [i, score, false]).concat(hidden.map(([i, score]) => [i, score, true]));
+  for (const [i, score, filtered] of rows) {
     const skipped = state.skipped.has(i);
     const li = document.createElement('li');
-    li.className = 'now-item' + (score < state.threshold || skipped ? ' maybe' : '');
+    li.className = 'now-item' + (filtered || score < state.threshold || skipped ? ' maybe' : '');
     const name = document.createElement('span');
     name.className = 'name';
-    name.textContent = state.labels[i].commonName +
-      (skipped ? ' (skipped)' : score < state.threshold ? ' (possible)' : '');
+    name.textContent = state.labels[i].commonName + (
+      filtered ? ` (hidden by location filter, range score ${(state.geoScores[i] * 100).toFixed(1)}%)`
+        : skipped ? ' (skipped)' : score < state.threshold ? ' (possible)' : '');
     const pct = document.createElement('span');
     pct.className = 'pct';
     pct.textContent = `${Math.round(score * 100)}%`;
@@ -1297,9 +1311,13 @@ function enableGeo() {
   els.geoNote.textContent = 'Getting your location…';
   navigator.geolocation.getCurrentPosition(
     ({ coords }) => {
-      state.worker.postMessage({ type: 'area', latitude: coords.latitude, longitude: coords.longitude });
+      if (!els.geoToggle.checked) return; // switched off while the fix was pending
       state.position = { latitude: coords.latitude, longitude: coords.longitude };
-      els.geoNote.textContent = `Filtering for ${coords.latitude.toFixed(2)}°, ${coords.longitude.toFixed(2)}° this week of the year.`;
+      requestGeoScores();
+      // Show the fix so a wrong one (e.g. an IP-based guess) is easy to spot.
+      const km = Math.round(coords.accuracy / 1000);
+      els.geoNote.textContent = `Filtering for ${coords.latitude.toFixed(2)}°, ${coords.longitude.toFixed(2)}°` +
+        (coords.accuracy > COARSE_FIX_M ? ` (approximate, within about ${km} km)` : '') + ' this week of the year.';
       saveSetting('birdsong.geo', '1');
     },
     err => {
@@ -1310,8 +1328,19 @@ function enableGeo() {
   );
 }
 
+function requestGeoScores() {
+  state.geoWeek = birdnetWeek(new Date());
+  state.worker.postMessage({ type: 'area', ...state.position, week: state.geoWeek });
+}
+
+/** A session left open past a week boundary gets that week's scores. */
+function refreshGeoWeek() {
+  if (state.position && state.geoWeek !== birdnetWeek(new Date())) requestGeoScores();
+}
+
 function disableGeo() {
   state.geoScores = null;
+  state.geoWeek = null;
   state.position = null;
   els.geoNote.textContent = 'Uses your location and the time of year to rule out unlikely birds.';
   saveSetting('birdsong.geo', '0');
