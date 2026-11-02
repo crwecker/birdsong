@@ -7,7 +7,8 @@
   "scripts": {
     "setup": "node scripts/setup.mjs",
     "postinstall": "node scripts/setup.mjs",
-    "start": "node server.mjs"
+    "start": "node server.mjs",
+    "test": "node --test"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.3.0",

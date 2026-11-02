@@ -9,7 +9,7 @@
  * itself based on https://github.com/georg95/birdnet-web.
  */
 
-importScripts('vendor/tf.min.js');
+importScripts('vendor/tf.min.js', 'geo.js');
 
 const MODEL_PATH = 'models/birdnet/model.json';
 const AREA_MODEL_PATH = 'models/birdnet/area-model/model.json';
@@ -265,13 +265,10 @@ async function predict({ id, pcm, hop = WINDOW_SAMPLES }) {
 }
 
 /** Per-species likelihood of occurring at this location and week of year. */
-async function areaScores({ latitude, longitude }) {
+async function areaScores({ latitude, longitude, week = BirdsongGeo.birdnetWeek(new Date()) }) {
   if (!areaModel) return;
-  const now = new Date();
-  // BirdNET uses a 48-week year (4 weeks per month).
-  const week = Math.min(48, now.getMonth() * 4 + Math.ceil(now.getDate() / 7.75));
   const scores = tf.tidy(() => areaModel.predict(tf.tensor([[latitude, longitude, week]])));
   const data = await scores.data();
   scores.dispose();
-  postMessage({ type: 'area', scores: Array.from(data) });
+  postMessage({ type: 'area', week, scores: Array.from(data) });
 }
