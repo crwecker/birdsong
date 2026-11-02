@@ -491,6 +491,12 @@ function plausibleHits(hits) {
   });
 }
 
+/** Species the location filter removed from this frame (strong enough to have been shown). */
+function hiddenByGeo(hits) {
+  if (!state.geoScores) return [];
+  return hits.filter(([i, s]) => s >= MAYBE_FLOOR && state.labels[i]?.isSpecies && state.geoScores[i] < GEO_MIN);
+}
+
 /** `clipSource` is a copy of the analysed window when clips are being kept. */
 function handleLiveFrame(hits, recordedAt, clipSource) {
   // The mic would hear a reference recording playing through the speakers.
@@ -499,7 +505,8 @@ function handleLiveFrame(hits, recordedAt, clipSource) {
     return;
   }
   const candidates = plausibleHits(hits).filter(([, s]) => s >= MAYBE_FLOOR).slice(0, 5);
-  renderNow(candidates);
+  // Show what the filter hid (greyed, never logged), so its decisions can be checked.
+  renderNow(candidates, hiddenByGeo(hits).slice(0, 2));
   recordings.addLiveHits(candidates.filter(([, s]) => s >= state.threshold), recordedAt);
   for (const [i, score] of candidates) {
     if (score >= state.threshold) {
@@ -510,20 +517,22 @@ function handleLiveFrame(hits, recordedAt, clipSource) {
   }
 }
 
-function renderNow(candidates) {
+function renderNow(candidates, hidden = []) {
   els.nowList.replaceChildren();
-  if (!candidates.length) {
+  if (!candidates.length && !hidden.length) {
     els.nowList.innerHTML = '<li class="empty">No birds detected right now. Keep listening…</li>';
     return;
   }
-  for (const [i, score] of candidates) {
+  const rows = candidates.map(([i, score]) => [i, score, false]).concat(hidden.map(([i, score]) => [i, score, true]));
+  for (const [i, score, filtered] of rows) {
     const skipped = state.skipped.has(i);
     const li = document.createElement('li');
-    li.className = 'now-item' + (score < state.threshold || skipped ? ' maybe' : '');
+    li.className = 'now-item' + (filtered || score < state.threshold || skipped ? ' maybe' : '');
     const name = document.createElement('span');
     name.className = 'name';
-    name.textContent = state.labels[i].commonName +
-      (skipped ? ' (skipped)' : score < state.threshold ? ' (possible)' : '');
+    name.textContent = state.labels[i].commonName + (
+      filtered ? ` (hidden by location filter, range score ${(state.geoScores[i] * 100).toFixed(1)}%)`
+        : skipped ? ' (skipped)' : score < state.threshold ? ' (possible)' : '');
     const pct = document.createElement('span');
     pct.className = 'pct';
     pct.textContent = `${Math.round(score * 100)}%`;

@@ -37,8 +37,9 @@ pages or `http://localhost`, so deploy `public/` behind HTTPS if you host it els
 - **Live spectrogram** with a label at the moment each new bird is detected.
 - **Location filter** (optional): BirdNET's range model uses your location and the week of the year
   to drop species that wouldn't plausibly be there. This removes most false positives. The note
-  under the switch shows the position in use (and flags a vague, IP-based fix), since a wrong
-  position is what makes common local birds disappear.
+  under the switch shows the position in use (and flags a vague, IP-based fix), and species the
+  filter hides still appear greyed in the live list with their range score, so its decisions
+  can be checked.
 - **Session recording**: **Record** captures exactly what the model hears (48 kHz mono WAV), along
   with the timestamps of live detections. Audio streams to the server every few seconds, so long
   sessions don't build up in browser memory and a closed tab still leaves a usable file.

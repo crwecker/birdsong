@@ -83,9 +83,8 @@ test('the filter still rules out out-of-season and out-of-range birds at Monett'
   assert.ok(kept < labels.length / 20, `filter kept ${kept} of ${labels.length} species`);
 });
 
-test('a wrong location fix (swapped coordinates) drops the residents', () => {
-  // The failure mode the filter note now makes visible: these birds only vanish
-  // when the position handed to the model is not actually Monett.
+test('the filter is location-sensitive (swapped coordinates drop the residents)', () => {
+  // Guards the [latitude, longitude, week] input order used by worker.js.
   const scores = areaScores(MONETT[1], MONETT[0], birdnetWeek(EARLY_NOVEMBER));
   for (const name of RESIDENTS) assert.ok(!passes(scores, name));
 });
