@@ -93,7 +93,8 @@ function startWorker() {
         break;
       case 'area':
         // Ignore a late reply after the filter was turned off or the week moved on.
-        if (state.position && data.week === state.geoWeek) state.geoScores = data.scores;
+        if (state.position?.latitude === data.latitude && state.position.longitude === data.longitude &&
+            data.week === state.geoWeek) state.geoScores = data.scores;
         break;
       case 'predict-progress':
         state.pending.get(data.id)?.onProgress?.(data.progress);
@@ -1255,6 +1256,7 @@ function enableGeo() {
   els.geoNote.textContent = 'Getting your location…';
   navigator.geolocation.getCurrentPosition(
     ({ coords }) => {
+      if (!els.geoToggle.checked) return; // switched off while the fix was pending
       state.position = { latitude: coords.latitude, longitude: coords.longitude };
       requestGeoScores();
       // Show the fix so a wrong one (e.g. an IP-based guess) is easy to spot.

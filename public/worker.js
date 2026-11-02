@@ -270,5 +270,5 @@ async function areaScores({ latitude, longitude, week = BirdsongGeo.birdnetWeek(
   const scores = tf.tidy(() => areaModel.predict(tf.tensor([[latitude, longitude, week]])));
   const data = await scores.data();
   scores.dispose();
-  postMessage({ type: 'area', week, scores: Array.from(data) });
+  postMessage({ type: 'area', latitude, longitude, week, scores: Array.from(data) });
 }
