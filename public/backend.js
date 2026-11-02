@@ -115,10 +115,11 @@ function browserBackend() {
   // One object URL per stored clip, made once and revoked when the sighting is deleted.
   const blobUrls = new Map(); // sighting id -> [url]
   function withBlobUrls({ clips, ...sighting }) {
-    if (!clips?.length) return sighting;
-    if (!blobUrls.has(sighting.id)) blobUrls.set(sighting.id, clips.map(c => URL.createObjectURL(c.blob)));
+    const playable = (clips ?? []).filter(c => c?.blob instanceof Blob); // one bad record mustn't break the list
+    if (!playable.length) return sighting;
+    if (!blobUrls.has(sighting.id)) blobUrls.set(sighting.id, playable.map(c => URL.createObjectURL(c.blob)));
     const urls = blobUrls.get(sighting.id);
-    return { ...sighting, clips: clips.map(({ score, at }, n) => ({ score, at, url: urls[n] })) };
+    return { ...sighting, clips: playable.map(({ score, at }, n) => ({ score, at, url: urls[n] })) };
   }
 
   const getRec = id => idb(db, 'recordings', s => s.get(id));

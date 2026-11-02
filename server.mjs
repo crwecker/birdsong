@@ -77,7 +77,7 @@ async function handleSightingsApi(req, url, res) {
     res.end(JSON.stringify(body));
   };
   const clip = /^\/api\/sightings\/([\w-]+)\/clips\/(\d+)$/.exec(url.pathname);
-  if (clip && req.method === 'GET') return sightings.serveClip(clip[1], Number(clip[2]), res);
+  if (clip && req.method === 'GET') return sightings.serveClip(clip[1], Number(clip[2]), req, res);
   if (url.pathname !== '/api/sightings') return send(404, { error: 'not found' });
   if (req.method === 'GET') return send(200, await sightings.list());
   if (req.method === 'DELETE') return send(200, { removed: await sightings.remove(url.searchParams.get('id')) });
@@ -90,6 +90,7 @@ async function handleSightingsApi(req, url, res) {
   } catch (err) {
     return send(err.status || 400, { error: err.message });
   }
+  if (!b || typeof b !== 'object') return send(400, { error: 'invalid sighting' });
   const info = await birdInfo.species(b.scientificName);
   if (!info) return send(400, { error: 'unknown species' });
   const num = v => (Number.isFinite(v) ? v : null);
@@ -97,7 +98,8 @@ async function handleSightingsApi(req, url, res) {
   for (const c of Array.isArray(b.clips) ? b.clips.slice(0, MAX_CLIPS) : []) {
     const wav = typeof c?.wav === 'string' ? Buffer.from(c.wav, 'base64') : null;
     if (!wav || wav.length < 44 || wav.length > MAX_CLIP_BYTES
-      || wav.toString('latin1', 0, 4) !== 'RIFF' || wav.toString('latin1', 8, 12) !== 'WAVE') {
+      || wav.toString('latin1', 0, 4) !== 'RIFF' || wav.toString('latin1', 8, 12) !== 'WAVE'
+      || !Number.isFinite(c.at)) {
       return send(400, { error: 'invalid clip' });
     }
     clips.push({ wav, score: num(c.score), at: num(c.at) });
@@ -139,8 +141,14 @@ createServer(async (req, res) => {
   if (url.pathname === '/api/bird' || url.pathname.startsWith('/api/sightings')) {
     const handler = url.pathname === '/api/bird' ? handleBirdApi(url, res) : handleSightingsApi(req, url, res);
     handler.catch(err => {
+      if (res.headersSent) {
+        // Mid-stream (usually the player hanging up on a clip): just drop the connection.
+        if (err.code !== 'ERR_STREAM_PREMATURE_CLOSE') console.error(err);
+        res.destroy();
+        return;
+      }
       console.error(err);
-      if (!res.headersSent) res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end('{"error":"lookup failed"}');
     });
     return;
