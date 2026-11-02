@@ -764,7 +764,8 @@ function renderHeard(el, clipList, commonName) {
     refAudio.adopt(btn, clip.url); // keep a playing clip's button live across re-renders
     const download = h('a', 'clip-dl');
     download.href = clip.url;
-    download.download = `${commonName} ${time.replace(/:/g, '.')}.wav`;
+    const day = new Date(clip.at).toLocaleDateString('en-CA'); // YYYY-MM-DD, so saved clips from different days don't collide
+    download.download = `${commonName} ${day} ${time.replace(/:/g, '.')}.wav`;
     download.title = 'Download this clip';
     download.setAttribute('aria-label', download.title);
     download.innerHTML = DOWNLOAD_ICON;
