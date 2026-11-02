@@ -31,8 +31,13 @@ pages or `http://localhost`, so deploy `public/` behind HTTPS if you host it els
   - **Heard clips** (Settings › Keep clips of each bird, on by default): the 3 s of audio behind each
     identification, the strongest window per encounter, up to 4 per bird. Clips are volume-normalized,
     play from Details, and can be downloaded as WAV. They stay in memory until you clear the list or
-    close the page.
-  - **Save**: records a verified sighting in **My sightings** (stored in `data/sightings.json`).
+    close the page, unless you mark the bird **Saw it**.
+  - **Saw it**: records a verified sighting in **My sightings**, together with its 2 strongest heard
+    clips (3 s, 48 kHz WAV, about 290 KB each, so at most ~580 KB per sighting; nothing extra if clips
+    are turned off). The server keeps the sighting in `data/sightings.json` and its clips in
+    `data/sightings/`; static hosting keeps both in IndexedDB. Saved sightings have the same
+    **Details** dropdown as the live list, with their clips to play back or download. Sightings saved
+    before clips were kept show the reference details only.
   - **Skip**: hides the bird for the rest of the session. **×** removes it until it's heard again.
 - **Live spectrogram** with a label at the moment each new bird is detected.
 - **Location filter** (optional): BirdNET's range model uses your location and the week of the year
@@ -98,7 +103,7 @@ Details are cached for 30 days in `data/cache/`; adding a key upgrades cached en
 | `server.mjs` | Static server plus `/api/bird`, `/api/sightings`, `/api/recordings` |
 | `lib/recordings.mjs` | Recording storage in `data/recordings/` (streamed WAV writes, Range requests for seeking) |
 | `lib/birdinfo.mjs` | Gathers photos (iNaturalist), sounds (xeno-canto / iNaturalist) and notes (Claude / Wikipedia) |
-| `lib/sightings.mjs` | Saved sightings store |
+| `lib/sightings.mjs` | Saved sightings store, with their clips |
 
 The model's custom mel-spectrogram layer and WebGL STFT kernel come from
 [BirdNET Live](https://github.com/birdnet-team/real-time-pwa) (MIT), based on
