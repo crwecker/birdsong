@@ -20,6 +20,7 @@ const MAYBE_FLOOR = 0.1; // show weaker candidates (greyed) above this
 const GEO_MIN = 0.03; // area-model score below which a species is ruled out
 const NEW_ENCOUNTER_GAP_MS = 5000; // detections closer than this count as one
 const CLIPS_PER_BIRD = 4; // playable clips kept per species (one per encounter, strongest first to go last)
+const CLIPS_PER_SIGHTING = 2; // strongest clips stored with a saved sighting (~290 KB each)
 
 const $ = id => document.getElementById(id);
 const els = {
@@ -580,18 +581,7 @@ function createLogItem(entry) {
   el.querySelector('.thumb span').textContent = commonName[0];
   loadThumbnail(scientificName, el.querySelector('.thumb'));
 
-  const detailsBtn = el.querySelector('.details-btn');
-  const detail = el.querySelector('.detail');
-  const ref = detail.querySelector('.ref');
-  detailsBtn.addEventListener('click', () => {
-    const open = detail.hidden;
-    detail.hidden = !open;
-    detailsBtn.setAttribute('aria-expanded', String(open));
-    if (open && !ref.dataset.loaded) {
-      ref.dataset.loaded = '1';
-      renderDetail(ref, scientificName);
-    }
-  });
+  wireDetails(el, scientificName);
   el.querySelector('.act.save').addEventListener('click', () => toggleSaved(entry));
   el.querySelector('.act.remove').addEventListener('click', () => removeFromLog(entry.index));
   el.querySelector('.act.skip').addEventListener('click', () => skipBird(entry));
@@ -704,7 +694,8 @@ function keepClip(entry, score, pcm) {
   entry.clips ??= [];
   const current = entry.clips.find(c => c.encounter === entry.count);
   if (current && score <= current.score) return;
-  const clip = { encounter: entry.count, score, at: Date.now(), url: URL.createObjectURL(encodeClip(pcm)) };
+  const blob = encodeClip(pcm);
+  const clip = { encounter: entry.count, score, at: Date.now(), blob, url: URL.createObjectURL(blob) };
   if (current) {
     URL.revokeObjectURL(current.url);
     entry.clips[entry.clips.indexOf(current)] = clip;
@@ -743,16 +734,23 @@ function encodeClip(pcm) {
 }
 
 function renderClips(entry) {
-  const box = entry.el.querySelector('.heard');
-  const clips = [...(entry.clips ?? [])].sort((a, b) => a.at - b.at);
-  const detailsBtn = entry.el.querySelector('.details-btn');
+  renderHeard(entry.el, entry.clips, state.labels[entry.index].commonName);
+}
+
+/**
+ * Fills a list or saved item's "Heard by Birdsong" box with playable clips
+ * (`{ url, score, at }`) and shows the clip count on its Details button.
+ */
+function renderHeard(el, clipList, commonName) {
+  const box = el.querySelector('.heard');
+  const clips = [...(clipList ?? [])].sort((a, b) => a.at - b.at);
+  const detailsBtn = el.querySelector('.details-btn');
   detailsBtn.textContent = clips.length ? `Details · ${clips.length} clip${clips.length > 1 ? 's' : ''}` : 'Details';
   box.hidden = !clips.length;
   if (!clips.length) {
     box.replaceChildren();
     return;
   }
-  const { commonName } = state.labels[entry.index];
   const row = h('div', 'sound-row');
   for (const clip of clips) {
     const time = formatClock(clip.at, true);
@@ -760,7 +758,8 @@ function renderClips(entry) {
     btn.type = 'button';
     btn.title = `Play what Birdsong heard at ${time}`;
     btn.innerHTML = PLAY_ICON;
-    btn.append(time, h('span', 'dur', `${Math.round(clip.score * 100)}%`));
+    btn.append(time);
+    if (clip.score != null) btn.append(h('span', 'dur', `${Math.round(clip.score * 100)}%`));
     btn.addEventListener('click', () => refAudio.toggle(btn, clip.url));
     refAudio.adopt(btn, clip.url); // keep a playing clip's button live across re-renders
     const download = h('a', 'clip-dl');
@@ -774,6 +773,22 @@ function renderClips(entry) {
     row.append(pair);
   }
   box.replaceChildren(h('h4', '', 'Heard by Birdsong'), row);
+}
+
+/** Wires a Details button to open its dropdown, loading photos, sounds and notes the first time. */
+function wireDetails(el, scientificName) {
+  const detailsBtn = el.querySelector('.details-btn');
+  const detail = el.querySelector('.detail');
+  const ref = detail.querySelector('.ref');
+  detailsBtn.addEventListener('click', () => {
+    const open = detail.hidden;
+    detail.hidden = !open;
+    detailsBtn.setAttribute('aria-expanded', String(open));
+    if (open && !ref.dataset.loaded) {
+      ref.dataset.loaded = '1';
+      renderDetail(ref, scientificName);
+    }
+  });
 }
 
 /* ---------------------------------------------------------------------------
@@ -1136,7 +1151,10 @@ refAudio.el.addEventListener('ended', () => refAudio.stop());
    Saved sightings
    ------------------------------------------------------------------------- */
 
-/** Save toggles a verified sighting; clicking again ("Unsave") deletes it. */
+/**
+ * "Saw it" records a verified sighting, along with the strongest heard clips
+ * behind it; clicking again ("Undo") deletes it.
+ */
 async function toggleSaved(entry) {
   const button = entry.el.querySelector('.act.save');
   button.disabled = true;
@@ -1153,7 +1171,7 @@ async function toggleSaved(entry) {
         latitude: state.position?.latitude ?? null,
         longitude: state.position?.longitude ?? null,
         source: entry.note || 'live',
-      });
+      }, strongestClips(entry));
       state.sightings.unshift(sighting);
       entry.sightingId = sighting.id;
       renderSightings();
@@ -1161,7 +1179,7 @@ async function toggleSaved(entry) {
     updateSaveButton(entry);
   } catch (err) {
     console.error(err);
-    button.title = 'Couldn’t update your sightings. Please try again.';
+    button.title = 'Couldn’t update My sightings. Please try again.';
   } finally {
     button.disabled = false;
   }
@@ -1172,9 +1190,18 @@ function updateSaveButton(entry) {
   const saved = !!entry.sightingId;
   button.classList.toggle('saved', saved);
   button.setAttribute('aria-pressed', String(saved));
-  button.querySelector('.lbl').textContent = saved ? 'Saved' : 'Save';
-  button.title = saved ? 'Saved to My sightings. Click to unsave.' : 'Save as a verified sighting';
+  button.querySelector('.lbl').textContent = 'Saw it';
+  button.title = saved ? 'In My sightings. Click to undo.' : 'Saw it: add to My sightings';
   button.setAttribute('aria-label', button.title);
+}
+
+/** The clips to keep with a sighting: the strongest few, as `{ blob, score, at }`. */
+function strongestClips(entry) {
+  return [...(entry.clips ?? [])]
+    .filter(c => c.blob)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, CLIPS_PER_SIGHTING)
+    .map(({ blob, score, at }) => ({ blob, score, at }));
 }
 
 async function deleteSighting(id) {
@@ -1199,25 +1226,43 @@ async function loadSightings() {
   renderSightings();
 }
 
+// Rendered rows by sighting id, so adding or deleting one keeps the others' open
+// details (and any clip that's playing) intact.
+const sightingEls = new Map();
+
 function renderSightings() {
   els.savedCount.textContent = state.sightings.length;
+  const ids = new Set(state.sightings.map(s => s.id));
+  for (const [id, el] of sightingEls) {
+    if (ids.has(id)) continue;
+    if (refAudio.button && el.contains(refAudio.button)) refAudio.stop();
+    sightingEls.delete(id);
+  }
   if (!state.sightings.length) {
-    els.savedList.innerHTML = '<li class="empty">Tap <strong>Save</strong> on a bird you’ve confirmed to keep it here.</li>';
+    els.savedList.innerHTML = '<li class="empty">Tap <strong>Saw it</strong> on a bird you’ve confirmed to keep it here.</li>';
     return;
   }
   els.savedList.replaceChildren(...state.sightings.map(s => {
-    const el = els.savedItemTpl.content.firstElementChild.cloneNode(true);
-    el.querySelector('.name').textContent = s.commonName;
-    el.querySelector('.thumb span').textContent = s.commonName[0];
-    loadThumbnail(s.scientificName, el.querySelector('.thumb'));
-    const when = new Date(s.seenAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-    const bits = [when];
-    if (s.confidence != null) bits.push(`${Math.round(s.confidence * 100)}%`);
-    if (s.latitude != null) bits.push(`${s.latitude.toFixed(2)}°, ${s.longitude.toFixed(2)}°`);
-    el.querySelector('.stats').textContent = bits.join(' · ');
-    el.querySelector('.act.remove').addEventListener('click', () => deleteSighting(s.id).catch(console.error));
-    return el;
+    if (!sightingEls.has(s.id)) sightingEls.set(s.id, createSightingItem(s));
+    return sightingEls.get(s.id);
   }));
+}
+
+/** A saved sighting, with the same Details dropdown as the live list, plus its stored clips. */
+function createSightingItem(s) {
+  const el = els.savedItemTpl.content.firstElementChild.cloneNode(true);
+  el.querySelector('.name').textContent = s.commonName;
+  el.querySelector('.thumb span').textContent = s.commonName[0];
+  loadThumbnail(s.scientificName, el.querySelector('.thumb'));
+  const when = new Date(s.seenAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  const bits = [when];
+  if (s.confidence != null) bits.push(`${Math.round(s.confidence * 100)}%`);
+  if (s.latitude != null) bits.push(`${s.latitude.toFixed(2)}°, ${s.longitude.toFixed(2)}°`);
+  el.querySelector('.stats').textContent = bits.join(' · ');
+  wireDetails(el, s.scientificName);
+  renderHeard(el, s.clips, s.commonName); // older sightings have no clips: Details shows the reference info only
+  el.querySelector('.act.remove').addEventListener('click', () => deleteSighting(s.id).catch(console.error));
+  return el;
 }
 
 function h(tag, className = '', text) {

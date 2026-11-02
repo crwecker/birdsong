@@ -42,8 +42,12 @@ function serverBackend() {
     birdInfo: sci => fetch(`/api/bird?sci=${encodeURIComponent(sci)}`).then(json),
 
     sightings: {
-      list: () => fetch('/api/sightings').then(json),
-      add: entry => send('/api/sightings', 'POST', entry),
+      list: async () => (await fetch('/api/sightings').then(json)).map(withClipUrls),
+      /** `clips` are `{ blob, score, at }`; they're stored with the sighting. */
+      async add(entry, clips = []) {
+        const encoded = await Promise.all(clips.map(async c => ({ score: c.score, at: c.at, wav: await toBase64(c.blob) })));
+        return withClipUrls(await send('/api/sightings', 'POST', { ...entry, clips: encoded }));
+      },
       remove: id => fetch(`/api/sightings?id=${encodeURIComponent(id)}`, { method: 'DELETE' }).then(json),
     },
 
@@ -108,6 +112,15 @@ function browserBackend() {
     return rec;
   }
 
+  // One object URL per stored clip, made once and revoked when the sighting is deleted.
+  const blobUrls = new Map(); // sighting id -> [url]
+  function withBlobUrls({ clips, ...sighting }) {
+    if (!clips?.length) return sighting;
+    if (!blobUrls.has(sighting.id)) blobUrls.set(sighting.id, clips.map(c => URL.createObjectURL(c.blob)));
+    const urls = blobUrls.get(sighting.id);
+    return { ...sighting, clips: clips.map(({ score, at }, n) => ({ score, at, url: urls[n] })) };
+  }
+
   const getRec = id => idb(db, 'recordings', s => s.get(id));
   const putRec = rec => idb(db, 'recordings', s => s.put({ ...rec, updatedAt: Date.now() }), 'readwrite');
 
@@ -136,14 +149,24 @@ function browserBackend() {
     },
 
     sightings: {
-      list: async () => (await idb(db, 'sightings', s => s.getAll())).sort((a, b) => b.savedAt.localeCompare(a.savedAt)),
-      async add(entry) {
+      // Clip audio is kept as Blobs inside the sighting record.
+      list: async () => (await idb(db, 'sightings', s => s.getAll()))
+        .sort((a, b) => b.savedAt.localeCompare(a.savedAt))
+        .map(withBlobUrls),
+      /** `clips` are `{ blob, score, at }`; they're stored with the sighting. */
+      async add(entry, clips = []) {
         const sighting = { id: crypto.randomUUID(), ...entry, savedAt: new Date().toISOString() };
+        if (clips.length) sighting.clips = clips.map(({ blob, score, at }) => ({ blob, score, at }));
         await idb(db, 'sightings', s => s.put(sighting), 'readwrite');
         persist();
-        return sighting;
+        return withBlobUrls(sighting);
       },
-      remove: id => idb(db, 'sightings', s => s.delete(id), 'readwrite').then(() => ({ removed: true })),
+      async remove(id) {
+        await idb(db, 'sightings', s => s.delete(id), 'readwrite');
+        blobUrls.get(id)?.forEach(url => URL.revokeObjectURL(url));
+        blobUrls.delete(id);
+        return { removed: true };
+      },
     },
 
     recordings: {
@@ -234,6 +257,22 @@ function browserBackend() {
       },
     },
   };
+}
+
+/** Gives a stored sighting's clips URLs the player can use. */
+function withClipUrls(sighting) {
+  if (!sighting.clips?.length) return sighting;
+  const base = `/api/sightings/${encodeURIComponent(sighting.id)}/clips/`;
+  return { ...sighting, clips: sighting.clips.map((c, n) => ({ ...c, url: base + n })) };
+}
+
+function toBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result.slice(reader.result.indexOf(',') + 1));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
 }
 
 function openDb() {

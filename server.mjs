@@ -5,7 +5,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { extname, join, normalize, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createBirdInfo } from './lib/birdinfo.mjs';
-import { createSightings } from './lib/sightings.mjs';
+import { createSightings, MAX_CLIPS, MAX_CLIP_BYTES } from './lib/sightings.mjs';
 import { createRecordings } from './lib/recordings.mjs';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
@@ -76,19 +76,32 @@ async function handleSightingsApi(req, url, res) {
     res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache' });
     res.end(JSON.stringify(body));
   };
+  const clip = /^\/api\/sightings\/([\w-]+)\/clips\/(\d+)$/.exec(url.pathname);
+  if (clip && req.method === 'GET') return sightings.serveClip(clip[1], Number(clip[2]), res);
+  if (url.pathname !== '/api/sightings') return send(404, { error: 'not found' });
   if (req.method === 'GET') return send(200, await sightings.list());
   if (req.method === 'DELETE') return send(200, { removed: await sightings.remove(url.searchParams.get('id')) });
   if (req.method !== 'POST') return send(405, { error: 'method not allowed' });
 
-  let body = '';
-  for await (const chunk of req) {
-    body += chunk;
-    if (body.length > 10_000) return send(413, { error: 'too large' });
+  let b;
+  try {
+    // Clips arrive base64-encoded: up to MAX_CLIPS WAVs plus a little metadata.
+    b = await readJson(req, Math.ceil(MAX_CLIPS * MAX_CLIP_BYTES * 4 / 3) + 10_000);
+  } catch (err) {
+    return send(err.status || 400, { error: err.message });
   }
-  const b = JSON.parse(body);
   const info = await birdInfo.species(b.scientificName);
   if (!info) return send(400, { error: 'unknown species' });
   const num = v => (Number.isFinite(v) ? v : null);
+  const clips = [];
+  for (const c of Array.isArray(b.clips) ? b.clips.slice(0, MAX_CLIPS) : []) {
+    const wav = typeof c?.wav === 'string' ? Buffer.from(c.wav, 'base64') : null;
+    if (!wav || wav.length < 44 || wav.length > MAX_CLIP_BYTES
+      || wav.toString('latin1', 0, 4) !== 'RIFF' || wav.toString('latin1', 8, 12) !== 'WAVE') {
+      return send(400, { error: 'invalid clip' });
+    }
+    clips.push({ wav, score: num(c.score), at: num(c.at) });
+  }
   send(201, await sightings.add({
     scientificName: b.scientificName,
     commonName: info,
@@ -97,7 +110,7 @@ async function handleSightingsApi(req, url, res) {
     latitude: num(b.latitude),
     longitude: num(b.longitude),
     source: typeof b.source === 'string' ? b.source.slice(0, 200) : null,
-  }));
+  }, clips));
 }
 
 async function handleBirdApi(url, res) {
@@ -123,7 +136,7 @@ createServer(async (req, res) => {
     });
     return;
   }
-  if (url.pathname === '/api/bird' || url.pathname === '/api/sightings') {
+  if (url.pathname === '/api/bird' || url.pathname.startsWith('/api/sightings')) {
     const handler = url.pathname === '/api/bird' ? handleBirdApi(url, res) : handleSightingsApi(req, url, res);
     handler.catch(err => {
       console.error(err);

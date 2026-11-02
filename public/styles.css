@@ -333,7 +333,7 @@ ul { list-style: none; margin: 0; padding: 0; }
 .act.save.saved { border-color: transparent; background: none; color: var(--accent); }
 .act.save.saved:hover { color: var(--muted); border-color: var(--border); }
 .act.save.saved:hover .lbl { display: none; }
-.act.save.saved:hover::after { content: "Unsave"; }
+.act.save.saved:hover::after { content: "Undo"; }
 .act.remove:hover { color: var(--danger); border-color: var(--danger); }
 .log-item .act:not(.save) { padding: 0; }
 
@@ -504,6 +504,8 @@ ul { list-style: none; margin: 0; padding: 0; }
 .saved-item .name { font-weight: 600; font-size: 15px; }
 .saved-item .stats { font-size: 13px; color: var(--muted); }
 .saved-item .act { padding: 0; }
+.saved-item { align-items: start; }
+.saved-item .thumb, .saved-item > .act { margin-top: 2px; }
 
 /* Photo viewer: full screen, full resolution, browsable */
 .lightbox {

@@ -88,7 +88,7 @@
         <span class="meta" id="savedMeta">verified by you</span>
       </div>
       <ul id="savedList" class="saved-list">
-        <li class="empty">Tap <strong>Save</strong> on a bird you’ve confirmed to keep it here.</li>
+        <li class="empty">Tap <strong>Saw it</strong> on a bird you’ve confirmed to keep it here.</li>
       </ul>
     </section>
 
@@ -191,9 +191,9 @@
         <button type="button" class="details-btn" aria-expanded="false">Details</button>
       </div>
       <div class="actions">
-        <button type="button" class="act save" title="Save as a verified sighting" aria-label="Save as a verified sighting">
+        <button type="button" class="act save" title="Saw it: add to My sightings" aria-label="Saw it: add to My sightings">
           <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10.5l4 4 8-9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          <span class="lbl">Save</span>
+          <span class="lbl">Saw it</span>
         </button>
         <button type="button" class="act skip" title="Skip this bird for the rest of the session" aria-label="Skip this bird for the rest of the session">
           <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="6.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M5.5 14.5l9-9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
@@ -215,10 +215,15 @@
       <div class="info">
         <div class="name"></div>
         <div class="stats"></div>
+        <button type="button" class="details-btn" aria-expanded="false">Details</button>
       </div>
       <button type="button" class="act remove" title="Delete this sighting" aria-label="Delete this sighting">
         <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5.5 5.5l9 9M14.5 5.5l-9 9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
       </button>
+      <div class="detail" hidden>
+        <div class="heard" hidden></div>
+        <div class="ref"></div>
+      </div>
     </li>
   </template>
 
